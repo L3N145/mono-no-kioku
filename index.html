@@ -98,6 +98,20 @@ label.field-label{font-size:12px;color:var(--sub);display:block;margin-top:4px;}
   background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);
   border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;margin-bottom:12px;
 }
+.angle-strip{
+  display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:8px 0 12px;
+}
+.angle-thumb-wrap{
+  position:relative;width:64px;height:64px;flex-shrink:0;
+}
+.angle-thumb{
+  width:100%;height:100%;object-fit:cover;border-radius:var(--radius);border:1px solid var(--line);
+}
+.angle-del-btn{
+  position:absolute;top:-4px;right:-4px;width:18px;height:18px;border-radius:50%;
+  background:var(--danger);color:#fff;border:none;font-size:10px;line-height:1;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;
+}
 </style>
 </head>
 <body>
@@ -124,7 +138,6 @@ label.field-label{font-size:12px;color:var(--sub);display:block;margin-top:4px;}
       <input type="file" accept="image/*" capture="environment" id="addPhotoInput" style="display:none;">
       <button class="btn block" id="addPhotoBtn">写真を撮影</button>
       
-      <!-- 重複検知時の警告枠 -->
       <div id="addDuplicateBox" class="warn-box" style="display:none;margin-top:12px;">
         <div id="addDuplicateMsg" style="font-weight:600;margin-bottom:6px;"></div>
         <div style="color:var(--ink);font-size:11px;margin-bottom:10px;">
@@ -148,6 +161,13 @@ label.field-label{font-size:12px;color:var(--sub);display:block;margin-top:4px;}
         <option value="file-lock">ファイル制限（現物照合までファイルを不可視化）</option>
         <option value="masked">マスク（現物照合まで外観・内容を伏せる）</option>
         <option value="hidden">非表示（一覧から除外、現物照合時のみ展開）</option>
+      </select>
+
+      <label class="field-label">照合感度（閾値）</label>
+      <select id="addThreshold">
+        <option value="0.75" selected>標準（75% - 通常の物体）</option>
+        <option value="0.82">厳格（82% - 無地・形状が単純な物体）</option>
+        <option value="0.70">寛容（70% - 角度や光で変化しやすい立体物）</option>
       </select>
       
       <button class="btn block" id="addSaveBtn" disabled>保存</button>
@@ -176,6 +196,17 @@ label.field-label{font-size:12px;color:var(--sub);display:block;margin-top:4px;}
 
     <div class="card">
       <img id="detailPhoto" class="preview">
+      
+      <!-- 別アングル登録管理 -->
+      <div id="detailAnglesCard">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <label class="field-label" style="margin:0;">登録アングル</label>
+          <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 10px;font-size:11px;">＋ アングル追加</button>
+        </div>
+        <input type="file" accept="image/*" capture="environment" id="detailAddAngleInput" style="display:none;">
+        <div class="angle-strip" id="detailAngleStrip"></div>
+      </div>
+
       <h2 id="detailName" style="font-size:16px;font-weight:600;margin:0 0 8px;"></h2>
       
       <label class="field-label">メモ</label>
@@ -187,6 +218,13 @@ label.field-label{font-size:12px;color:var(--sub);display:block;margin-top:4px;}
         <option value="file-lock">ファイル制限</option>
         <option value="masked">マスク</option>
         <option value="hidden">非表示</option>
+      </select>
+
+      <label class="field-label">照合感度（閾値）</label>
+      <select id="detailThreshold">
+        <option value="0.75">標準（75%）</option>
+        <option value="0.82">厳格（82%）</option>
+        <option value="0.70">寛容（70%）</option>
       </select>
     </div>
 
@@ -217,8 +255,8 @@ import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers
 
 env.allowLocalModels = false;
 
-const MATCH_THRESHOLD = 0.75;
-const DUPLICATE_THRESHOLD = 0.82; // 重複と判定するしきい値
+const DEFAULT_THRESHOLD = 0.75;
+const DUPLICATE_THRESHOLD = 0.82;
 
 let db, extractor, addBlob=null, addEmbedding=null, findBlob=null, currentDetailId=null;
 let duplicateCandidateId = null;
@@ -240,7 +278,7 @@ document.addEventListener('visibilitychange', () => {
 
 function openDb(){
   return new Promise((resolve,reject)=>{
-    const req = indexedDB.open('mono-no-kioku', 3);
+    const req = indexedDB.open('mono-no-kioku', 4);
     req.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('items')) d.createObjectStore('items', {keyPath:'id'});
@@ -303,8 +341,21 @@ function cosine(a, b){
   return Math.max(-1, Math.min(1, dot));
 }
 
+// 照合画面の状態初期化（前回の撮影・結果の残りを完全にクリア）
+function clearFindView(){
+  findBlob = null;
+  const img = document.getElementById('findPreview');
+  img.src = '';
+  img.style.display = 'none';
+  document.getElementById('findPhotoInput').value = '';
+  document.getElementById('findResult').innerHTML = '';
+  document.getElementById('findStatus').textContent = '';
+}
+
 function showView(name){
   if(name === 'list') lockAllSessions();
+  if(name === 'find') clearFindView();
+
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+name).classList.add('active');
   document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
@@ -326,7 +377,8 @@ async function renderList(){
     if(isMasked){
       div.innerHTML = `<div class="item-thumb masked">保護中</div><div class="item-name" style="color:var(--sub);">保護された記録</div>`;
     } else {
-      const imgUrl = URL.createObjectURL(it.photo);
+      const primaryPhoto = (it.photos && it.photos.length) ? it.photos[0] : it.photo;
+      const imgUrl = URL.createObjectURL(primaryPhoto);
       div.innerHTML = `<img class="item-thumb" src="${imgUrl}"><div class="item-name">${escapeHtml(it.name)}</div>`;
     }
     div.style.cursor='pointer';
@@ -341,7 +393,6 @@ document.getElementById('addPhotoBtn').onclick = ()=>document.getElementById('ad
 document.getElementById('addPhotoInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
   
-  // UIリセット
   document.getElementById('addDuplicateBox').style.display = 'none';
   duplicateCandidateId = null;
   document.getElementById('addSaveBtn').disabled = true;
@@ -356,12 +407,14 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
   document.getElementById('addStatus').textContent = '特徴抽出・重複確認中...';
   addEmbedding = await embed(addBlob);
 
-  // 既存データとの重複スキャン
   const items = await idbAll();
   let maxScore = -1, candidate = null;
   for(const it of items){
-    const s = cosine(addEmbedding, it.embedding);
-    if(s > maxScore){ maxScore = s; candidate = it; }
+    const embs = it.embeddings || [it.embedding];
+    for(const em of embs){
+      const s = cosine(addEmbedding, em);
+      if(s > maxScore){ maxScore = s; candidate = it; }
+    }
   }
 
   document.getElementById('addStatus').textContent = '完了';
@@ -374,17 +427,14 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
     document.getElementById('addDuplicateMsg').textContent = 
       `既存の${targetLabel}と類似しています（一致率 ${(maxScore*100).toFixed(0)}%）`;
     document.getElementById('addDuplicateBox').style.display = 'block';
-    // 警告が出た場合は判断を促すため保存ボタンを初期無効化
     document.getElementById('addSaveBtn').disabled = true;
   } else {
     document.getElementById('addSaveBtn').disabled = false;
   }
 };
 
-// 重複警告の分岐アクション
 document.getElementById('addOpenExistingBtn').onclick = ()=>{
   if(!duplicateCandidateId) return;
-  // 照合したものとみなしセッション解除して遷移
   unlockedSessions.add(duplicateCandidateId);
   openDetail(duplicateCandidateId);
 };
@@ -397,9 +447,13 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   const name = document.getElementById('addName').value.trim() || '名称未設定';
   const note = document.getElementById('addNote').value.trim();
   const security = document.getElementById('addSecurity').value;
+  const threshold = parseFloat(document.getElementById('addThreshold').value) || DEFAULT_THRESHOLD;
+  
   const item = {
     id:'item_'+Date.now()+'_'+Math.random().toString(16).slice(2,8),
-    name, note, security, photo:addBlob, embedding:addEmbedding,
+    name, note, security, threshold,
+    photos: [addBlob],
+    embeddings: [addEmbedding],
     files:[], createdAt:Date.now()
   };
   await idbPut(item);
@@ -407,6 +461,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   document.getElementById('addName').value='';
   document.getElementById('addNote').value='';
   document.getElementById('addSecurity').value='standard';
+  document.getElementById('addThreshold').value='0.75';
   document.getElementById('addPreview').style.display='none';
   document.getElementById('addDuplicateBox').style.display='none';
   document.getElementById('addSaveBtn').disabled=true;
@@ -429,12 +484,31 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   
   const emb = await embed(findBlob);
   const items = await idbAll();
-  let best=null, bestScore=-1;
-  items.forEach(it=>{ const s=cosine(emb, it.embedding); if(s>bestScore){bestScore=s; best=it;} });
-  document.getElementById('findStatus').textContent='';
   
+  let best=null, bestScore=-1, passThreshold=false;
+
+  for(const it of items){
+    const embs = it.embeddings || [it.embedding];
+    const itemThreshold = it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD;
+    
+    // 該当アイテムが持つ全アングル中、最高のスコアを算出
+    let itemMaxScore = -1;
+    for(const targetEmb of embs){
+      const s = cosine(emb, targetEmb);
+      if(s > itemMaxScore) itemMaxScore = s;
+    }
+
+    if(itemMaxScore > bestScore){
+      bestScore = itemMaxScore;
+      best = it;
+      passThreshold = (itemMaxScore >= itemThreshold);
+    }
+  }
+
+  document.getElementById('findStatus').textContent='';
   const resultDiv = document.getElementById('findResult');
-  if(best && bestScore >= MATCH_THRESHOLD){
+
+  if(best && passThreshold){
     unlockedSessions.add(best.id);
 
     resultDiv.innerHTML = `<div class="card">照合成功<span class="match-score">（一致率 ${(bestScore*100).toFixed(0)}%）</span></div>`;
@@ -465,31 +539,44 @@ async function openDetail(id){
   const isUnlocked = unlockedSessions.has(id);
   const sec = it.security || 'standard';
 
+  // 互換性担保（単一photo/embeddingからの移行）
+  if(!it.photos && it.photo) it.photos = [it.photo];
+  if(!it.embeddings && it.embedding) it.embeddings = [it.embedding];
+
   const lockNotice = document.getElementById('detailLockNotice');
   const photoEl = document.getElementById('detailPhoto');
   const nameEl = document.getElementById('detailName');
   const noteEl = document.getElementById('detailNote');
   const secEl = document.getElementById('detailSecurity');
+  const thEl = document.getElementById('detailThreshold');
+  const anglesCard = document.getElementById('detailAnglesCard');
   const filesCard = document.getElementById('detailFilesCard');
 
   secEl.value = sec;
+  thEl.value = String(it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD);
 
   if(sec === 'masked' && !isUnlocked){
     lockNotice.style.display = 'block';
     photoEl.style.display = 'none';
+    anglesCard.style.display = 'none';
     nameEl.textContent = '保護された記録';
     noteEl.value = '';
     noteEl.disabled = true;
     secEl.disabled = true;
+    thEl.disabled = true;
     filesCard.style.display = 'none';
   } else {
     lockNotice.style.display = (sec !== 'standard' && !isUnlocked) ? 'block' : 'none';
-    photoEl.src = URL.createObjectURL(it.photo);
+    photoEl.src = URL.createObjectURL(it.photos[0]);
     photoEl.style.display = 'block';
+    anglesCard.style.display = 'block';
+    renderDetailAngles(it);
+
     nameEl.textContent = it.name;
     noteEl.value = it.note || '';
     noteEl.disabled = false;
     secEl.disabled = false;
+    thEl.disabled = false;
 
     if(sec === 'file-lock' && !isUnlocked){
       filesCard.style.display = 'none';
@@ -512,6 +599,56 @@ document.getElementById('detailNote').onchange = async (e)=>{
 document.getElementById('detailSecurity').onchange = async (e)=>{
   const it = await idbGet(currentDetailId); it.security = e.target.value; await idbPut(it);
 };
+document.getElementById('detailThreshold').onchange = async (e)=>{
+  const it = await idbGet(currentDetailId); it.threshold = parseFloat(e.target.value); await idbPut(it);
+};
+
+// アングル一覧の描画と削除
+function renderDetailAngles(it){
+  const strip = document.getElementById('detailAngleStrip');
+  strip.innerHTML = '';
+  it.photos.forEach((blob, idx)=>{
+    const wrap = document.createElement('div');
+    wrap.className = 'angle-thumb-wrap';
+    const img = document.createElement('img');
+    img.className = 'angle-thumb';
+    img.src = URL.createObjectURL(blob);
+    wrap.appendChild(img);
+
+    // 2枚目以降のみ削除可能（最低1枚は維持）
+    if(it.photos.length > 1){
+      const delBtn = document.createElement('button');
+      delBtn.className = 'angle-del-btn';
+      delBtn.textContent = '×';
+      delBtn.onclick = async ()=>{
+        it.photos.splice(idx, 1);
+        it.embeddings.splice(idx, 1);
+        await idbPut(it);
+        openDetail(it.id);
+      };
+      wrap.appendChild(delBtn);
+    }
+    strip.appendChild(wrap);
+  });
+}
+
+// 別アングルの追加撮影
+document.getElementById('detailAddAngleBtn').onclick = ()=>document.getElementById('detailAddAngleInput').click();
+document.getElementById('detailAddAngleInput').onchange = async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  e.target.value = '';
+  const it = await idbGet(currentDetailId);
+  if(!it.photos) it.photos = [it.photo];
+  if(!it.embeddings) it.embeddings = [it.embedding];
+
+  const blob = await downscaleImage(file);
+  const emb = await embed(blob);
+  it.photos.push(blob);
+  it.embeddings.push(emb);
+  await idbPut(it);
+  openDetail(it.id);
+};
+
 document.getElementById('detailDeleteBtn').onclick = async ()=>{
   if(confirm('この記録と紐づくファイルを削除しますか？')){
     unlockedSessions.delete(currentDetailId);
@@ -583,17 +720,38 @@ function base64ToBlob(b64, type){
   return new Blob([arr], {type});
 }
 
+// 暗号化エクスポート（メモ除外オプション対応）
 async function exportItemsEncrypted(items, defaultFileName){
   const password = prompt('暗号化パスワードを設定してください:');
   if(!password) return;
+
+  // メモを含めるかの確認
+  const includeNote = confirm('メモの内容を含めて書き出しますか？\n（「キャンセル」を押すとメモを空にしてファイルのみ書き出します）');
+
   const serial = [];
   for(const it of items){
     const files = [];
     for(const f of (it.files||[])) files.push({name:f.name, type:f.blob.type, data: await blobToBase64(f.blob)});
-    serial.push({ id:it.id, name:it.name, note:it.note||'', security:it.security||'standard',
-      embedding:it.embedding, createdAt:it.createdAt, photo: await blobToBase64(it.photo),
-      photoType: it.photo.type, files });
+    
+    const photosSrc = (it.photos && it.photos.length) ? it.photos : [it.photo];
+    const photosB64 = [];
+    for(const p of photosSrc){
+      photosB64.push({ type: p.type, data: await blobToBase64(p) });
+    }
+
+    serial.push({
+      id: it.id,
+      name: it.name,
+      note: includeNote ? (it.note || '') : '',
+      security: it.security || 'standard',
+      threshold: it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD,
+      embeddings: it.embeddings || [it.embedding],
+      createdAt: it.createdAt,
+      photos: photosB64,
+      files
+    });
   }
+
   const jsonBytes = new TextEncoder().encode(JSON.stringify(serial));
   const encrypted = await encryptBytes(password, jsonBytes);
   const blob = new Blob([encrypted], {type:'application/octet-stream'});
@@ -626,10 +784,25 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
     const plain = await decryptBytes(password, bytes);
     const serial = JSON.parse(new TextDecoder().decode(plain));
     for(const it of serial){
-      const photo = base64ToBlob(it.photo, it.photoType);
+      let photos = [];
+      if(it.photos && it.photos.length){
+        photos = it.photos.map(p => base64ToBlob(p.data, p.type));
+      } else if(it.photo) {
+        photos = [base64ToBlob(it.photo, it.photoType)];
+      }
+
       const files = (it.files||[]).map(f=>({name:f.name, blob: base64ToBlob(f.data, f.type)}));
-      await idbPut({ id:it.id, name:it.name, note:it.note||'', security:it.security||'standard',
-        embedding:it.embedding, createdAt:it.createdAt, photo, files });
+      await idbPut({
+        id: it.id,
+        name: it.name,
+        note: it.note || '',
+        security: it.security || 'standard',
+        threshold: it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD,
+        embeddings: it.embeddings || [it.embedding],
+        photos,
+        files,
+        createdAt: it.createdAt
+      });
     }
     alert(`${serial.length}件の記録を読み込みました。`);
     renderList();
