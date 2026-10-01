@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mono-no-kioku-shell-v1';
+const CACHE_NAME = 'mono-no-kioku-shell-v2';
 const SHELL_FILES = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (event) => {
@@ -17,11 +17,9 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// アプリ本体（HTML/manifest）はキャッシュ優先で配信し、オフラインでも起動できるようにする。
-// モデルファイル自体（huggingface.co等）はTransformers.js側のキャッシュ機構に任せ、ここでは触らない。
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return; // 外部リソース（モデル等）はそのまま素通しする
+  if (url.origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
