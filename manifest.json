@@ -1,0 +1,9 @@
+{
+  "name": "モノの記憶",
+  "short_name": "モノの記憶",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f6f4ee",
+  "theme_color": "#2f5d4f",
+  "icons": []
+}
