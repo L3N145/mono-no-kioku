@@ -97,6 +97,7 @@ textarea{min-height:80px;resize:vertical;}
       <textarea id="detailNote" placeholder="メモを入力..." style="margin-top:10px;"></textarea>
     </div>
 
+    <!-- 紐づけファイル一覧 -->
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <b style="font-size:14px;">紐づけたファイル</b>
@@ -106,6 +107,7 @@ textarea{min-height:80px;resize:vertical;}
       <div id="detailFiles"></div>
     </div>
 
+    <!-- 共有／エクスポート・削除 -->
     <div class="card" style="display:flex;flex-direction:column;gap:8px;">
       <button class="btn secondary" id="detailExportBtn">📤 この記録を暗号化して書き出す（共有）</button>
       <button class="btn danger" id="detailDeleteBtn">🗑️ この記録を削除</button>
@@ -120,7 +122,6 @@ textarea{min-height:80px;resize:vertical;}
 </nav>
 
 <script type="module">
-// より安定したCDN指定
 import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
 
 env.allowLocalModels = false;
@@ -166,19 +167,45 @@ async function downscaleImage(file, maxSide = 1000, quality = 0.85){
   return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
 }
 
+// DINOの特徴ベクトルから画像全体の要約（[CLS]トークン）を取り出し、L2正規化する
 async function embed(blob){
   const url = URL.createObjectURL(blob);
   try {
-    const output = await extractor(url, { pooling: 'mean', normalize: true });
-    return Array.from(output.data);
+    const output = await extractor(url);
+    const hiddenDim = 384; // dino-vits16 の特徴量次元数
+    
+    // 先頭の384要素（[CLS]トークン）を抽出
+    const rawData = output.data;
+    const cls = new Float32Array(hiddenDim);
+    for (let i = 0; i < hiddenDim; i++) {
+      cls[i] = rawData[i];
+    }
+
+    // L2正規化（ベクトルの長さを1.0にする）
+    let sumSq = 0;
+    for (let i = 0; i < hiddenDim; i++) {
+      sumSq += cls[i] * cls[i];
+    }
+    const norm = Math.sqrt(sumSq) || 1.0;
+
+    const embedding = new Array(hiddenDim);
+    for (let i = 0; i < hiddenDim; i++) {
+      embedding[i] = cls[i] / norm;
+    }
+    return embedding;
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-function cosine(a,b){
-  let dot=0; for(let i=0;i<a.length;i++) dot+=a[i]*b[i];
-  return dot;
+// 正規化済みベクトルの内積（コサイン類似度: -1.0 〜 +1.0）
+function cosine(a, b){
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+  }
+  return Math.max(-1, Math.min(1, dot));
 }
 
 function showView(name){
@@ -281,7 +308,7 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   }
 };
 
-// 詳細
+// 詳細表示
 async function openDetail(id){
   currentDetailId = id;
   const it = await idbGet(id);
@@ -327,7 +354,7 @@ document.getElementById('detailFileInput').onchange = async (e)=>{
   e.target.value='';
 };
 
-// 暗号化・エクスポート
+// 暗号化基盤（AES-256-GCM + PBKDF2）
 async function deriveKey(password, salt){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -367,7 +394,7 @@ function base64ToBlob(b64, type){
 }
 
 async function exportItemsEncrypted(items, defaultFileName){
-  const password = prompt('暗号化するためのパスワード（合言葉）を入力してください:');
+  const password = prompt('暗号化するためのパスワード（合言葉）を決めてください。\n※受け取り相手が復号する際に必要です。');
   if(!password) return;
   const serial = [];
   for(const it of items){
@@ -385,18 +412,21 @@ async function exportItemsEncrypted(items, defaultFileName){
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+// 詳細画面からの単体エクスポート
 document.getElementById('detailExportBtn').onclick = async ()=>{
   const it = await idbGet(currentDetailId);
   const safeName = it.name.replace(/[/\\?%*:|"<>]/g, '_');
   await exportItemsEncrypted([it], `share-${safeName}-${Date.now()}.encbak`);
 };
 
+// 一覧画面からの全件バックアップ
 document.getElementById('backupAllBtn').onclick = async ()=>{
   const items = await idbAll();
   if(!items.length) return alert('登録されている記録がありません。');
   await exportItemsEncrypted(items, `mono-all-backup-${Date.now()}.encbak`);
 };
 
+// 復元・ファイル読込
 document.getElementById('restoreBtn').onclick = ()=>document.getElementById('restoreFileInput').click();
 document.getElementById('restoreFileInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
@@ -425,20 +455,17 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
   
   const statusEl = document.getElementById('headerStatus');
   try {
-    // ダウンロード進捗を表示するコールバックを追加
     extractor = await pipeline('image-feature-extraction', 'Xenova/dino-vits16', {
       quantized: true,
       progress_callback: (p) => {
         if (p.status === 'progress') {
-          statusEl.textContent = `モデルを準備中… ${p.file} (${Math.round(p.progress || 0)}%)`;
-        } else if (p.status === 'initiate') {
-          statusEl.textContent = `ダウンロード開始: ${p.file}…`;
+          statusEl.textContent = `モデルを準備中… (${Math.round(p.progress || 0)}%)`;
         }
       }
     });
   } catch(err) {
     statusEl.style.color = 'var(--danger)';
-    statusEl.textContent = `エラーが発生しました: ${err.message || err}`;
+    statusEl.textContent = `エラー: ${err.message || err}`;
     console.error('Model init error:', err);
     return;
   }
