@@ -358,7 +358,7 @@ const DEFAULT_THRESHOLD = 0.75;
 const DUPLICATE_THRESHOLD = 0.82;
 
 let db, extractor, deviceMasterKey=null;
-let addBlob=null, addEmbeddingGroup=[], findBlob=null, currentDetailId=null;
+let addDataUrl=null, addEmbeddingGroup=[], findDataUrl=null, currentDetailId=null;
 let duplicateCandidateId = null;
 let currentActivePhotoIdx = 0;
 let loadedDetailItem = null;
@@ -382,7 +382,7 @@ document.addEventListener('visibilitychange', () => {
 
 function openDb(){
   return new Promise((resolve,reject)=>{
-    const req = indexedDB.open('mono-no-kioku', 5);
+    const req = indexedDB.open('mono-no-kioku', 6);
     req.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('items')) d.createObjectStore('items', {keyPath:'id'});
@@ -435,26 +435,60 @@ async function decryptWithDeviceKey(key, cipherBytes){
   return new Uint8Array(plain);
 }
 
-function safeObjectUrl(source){
-  if (!source) return '';
-  try {
-    if (source instanceof Blob) {
-      return URL.createObjectURL(source);
+// 過去のBlobや壊れた形式を、すべて純粋なDataURL文字列に強制統一・救出する自動マイグレーション層
+async function normalizePhotosToDataUrls(photos){
+  if (!photos || !photos.length) return [];
+  const normalized = [];
+  for (const p of photos) {
+    if (!p) continue;
+    if (typeof p === 'string') {
+      if (p.startsWith('data:')) {
+        normalized.push(p);
+      } else if (p.startsWith('blob:')) {
+        // Blob URLを安全に取得
+        try {
+          const res = await fetch(p);
+          const b = await res.blob();
+          const dUrl = await new Promise(r => {
+            const fr = new FileReader();
+            fr.onload = () => r(fr.result);
+            fr.onerror = () => r('');
+            fr.readAsDataURL(b);
+          });
+          if (dUrl) normalized.push(dUrl);
+        } catch(e) {
+          console.warn('Recover blob URL failed:', e);
+        }
+      }
+    } else if (p instanceof Blob) {
+      const dUrl = await new Promise(r => {
+        const fr = new FileReader();
+        fr.onload = () => r(fr.result);
+        fr.onerror = () => r('');
+        fr.readAsDataURL(p);
+      });
+      if (dUrl) normalized.push(dUrl);
+    } else if (p.data && p.type) {
+      normalized.push(`data:${p.type};base64,${p.data}`);
     }
-    if (typeof source === 'string') {
-      if (source.startsWith('data:') || source.startsWith('blob:')) return source;
-      return URL.createObjectURL(base64ToBlob(source, 'image/jpeg'));
-    }
-    if (source.data && source.type) {
-      return URL.createObjectURL(base64ToBlob(source.data, source.type));
-    }
-  } catch (err) {
-    console.error('safeObjectUrl error:', err);
+  }
+  return normalized;
+}
+
+// 画面表示用の安全な画像文字列取得（フォールバック付き）
+function resolvePhotoSrc(photoSource){
+  if (!photoSource) return '';
+  if (typeof photoSource === 'string') return photoSource;
+  if (photoSource instanceof Blob) {
+    return URL.createObjectURL(photoSource);
+  }
+  if (photoSource.data && photoSource.type) {
+    return `data:${photoSource.type};base64,${photoSource.data}`;
   }
   return '';
 }
 
-async function cropCenterSquareAndDownscale(file, size = 800, quality = 0.85){
+async function cropCenterSquareToDataUrl(file, size = 800, quality = 0.85){
   const bmp = await createImageBitmap(file);
   const minSide = Math.min(bmp.width, bmp.height);
   const sx = Math.round((bmp.width - minSide) / 2);
@@ -466,12 +500,13 @@ async function cropCenterSquareAndDownscale(file, size = 800, quality = 0.85){
   const ctx = canvas.getContext('2d');
   ctx.drawImage(bmp, sx, sy, minSide, minSide, 0, 0, size, size);
   bmp.close();
-  return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+  return canvas.toDataURL('image/jpeg', quality);
 }
 
-async function generateRotatedBlobs(squareBlob){
-  const bmp = await createImageBitmap(squareBlob);
-  const size = bmp.width;
+async function generateRotatedDataUrls(baseDataUrl){
+  const img = new Image();
+  await new Promise(r => { img.onload = r; img.src = baseDataUrl; });
+  const size = img.width;
   const angles = [90, 180, 270];
   const results = [];
 
@@ -482,63 +517,56 @@ async function generateRotatedBlobs(squareBlob){
     const ctx = canvas.getContext('2d');
     ctx.translate(size / 2, size / 2);
     ctx.rotate((deg * Math.PI) / 180);
-    ctx.drawImage(bmp, -size / 2, -size / 2);
-    const b = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.85));
-    results.push(b);
+    ctx.drawImage(img, -size / 2, -size / 2);
+    results.push(canvas.toDataURL('image/jpeg', 0.85));
   }
-  bmp.close();
   return results;
 }
 
-async function embed(blob){
-  const url = URL.createObjectURL(blob);
-  try {
-    const output = await extractor(url);
-    const hiddenDim = 384;
-    const numPatches = 196;
-    const rawData = output.data;
+async function embed(imgSource){
+  const output = await extractor(imgSource);
+  const hiddenDim = 384;
+  const numPatches = 196;
+  const rawData = output.data;
 
-    const cls = new Float32Array(hiddenDim);
-    for (let i = 0; i < hiddenDim; i++) cls[i] = rawData[i];
+  const cls = new Float32Array(hiddenDim);
+  for (let i = 0; i < hiddenDim; i++) cls[i] = rawData[i];
 
-    const patchMean = new Float32Array(hiddenDim);
-    for (let p = 1; p <= numPatches; p++) {
-      const offset = p * hiddenDim;
-      for (let i = 0; i < hiddenDim; i++) {
-        patchMean[i] += rawData[offset + i];
-      }
-    }
-    for (let i = 0; i < hiddenDim; i++) patchMean[i] /= numPatches;
-
-    let sumSq = 0;
-    const hybrid = new Float32Array(hiddenDim);
+  const patchMean = new Float32Array(hiddenDim);
+  for (let p = 1; p <= numPatches; p++) {
+    const offset = p * hiddenDim;
     for (let i = 0; i < hiddenDim; i++) {
-      const val = cls[i] + patchMean[i];
-      hybrid[i] = val;
-      sumSq += val * val;
+      patchMean[i] += rawData[offset + i];
     }
-    const norm = Math.sqrt(sumSq) || 1.0;
-
-    const embedding = new Array(hiddenDim);
-    for (let i = 0; i < hiddenDim; i++) embedding[i] = hybrid[i] / norm;
-    return embedding;
-  } finally {
-    URL.revokeObjectURL(url);
   }
+  for (let i = 0; i < hiddenDim; i++) patchMean[i] /= numPatches;
+
+  let sumSq = 0;
+  const hybrid = new Float32Array(hiddenDim);
+  for (let i = 0; i < hiddenDim; i++) {
+    const val = cls[i] + patchMean[i];
+    hybrid[i] = val;
+    sumSq += val * val;
+  }
+  const norm = Math.sqrt(sumSq) || 1.0;
+
+  const embedding = new Array(hiddenDim);
+  for (let i = 0; i < hiddenDim; i++) embedding[i] = hybrid[i] / norm;
+  return embedding;
 }
 
-async function extract4WayEmbeddings(baseBlob, progressCb){
+async function extract4WayEmbeddings(baseDataUrl, progressCb){
   const embeddings = [];
   if (progressCb) progressCb('0° (BASE)');
-  const emb0 = await embed(baseBlob);
+  const emb0 = await embed(baseDataUrl);
   embeddings.push(emb0);
 
-  const rotatedBlobs = await generateRotatedBlobs(baseBlob);
+  const rotatedDataUrls = await generateRotatedDataUrls(baseDataUrl);
   const degrees = [90, 180, 270];
 
-  for (let i = 0; i < rotatedBlobs.length; i++) {
+  for (let i = 0; i < rotatedDataUrls.length; i++) {
     if (progressCb) progressCb(`${degrees[i]}° (ROTATION)`);
-    const emb = await embed(rotatedBlobs[i]);
+    const emb = await embed(rotatedDataUrls[i]);
     embeddings.push(emb);
   }
   return embeddings;
@@ -571,6 +599,9 @@ async function secureItemForStorage(rawItem){
   const sec = rawItem.security || 'standard';
   const primaryIdx = rawItem.primaryIdx !== undefined ? rawItem.primaryIdx : 0;
   
+  // 保存前に過去のあらゆる画像データを純粋なDataURL配列にマイグレーション統一
+  const cleanPhotos = await normalizePhotosToDataUrls(rawItem.photos || (rawItem.photo ? [rawItem.photo] : []));
+
   if(sec === 'standard'){
     return {
       id: rawItem.id,
@@ -581,15 +612,11 @@ async function secureItemForStorage(rawItem){
       createdAt: rawItem.createdAt,
       name: rawItem.name,
       note: rawItem.note || '',
-      photos: rawItem.photos,
+      photos: cleanPhotos,
       files: rawItem.files || []
     };
   }
 
-  const photosB64 = [];
-  for(const p of rawItem.photos){
-    photosB64.push({ type: p.type, data: await blobToBase64(p) });
-  }
   const filesB64 = [];
   for(const f of (rawItem.files || [])){
     filesB64.push({ name: f.name, type: f.blob.type, data: await blobToBase64(f.blob) });
@@ -607,17 +634,16 @@ async function secureItemForStorage(rawItem){
       createdAt: rawItem.createdAt,
       name: rawItem.name,
       note: rawItem.note || '',
-      photos: rawItem.photos,
+      photos: cleanPhotos,
       files: [],
       encryptedFiles: encryptedFiles
     };
   }
 
-  // MASKED または HIDDEN
   const sensitivePayload = {
     name: rawItem.name,
     note: rawItem.note || '',
-    photos: photosB64,
+    photos: cleanPhotos,
     files: filesB64
   };
   const plainBytes = new TextEncoder().encode(JSON.stringify(sensitivePayload));
@@ -638,10 +664,15 @@ async function secureItemForStorage(rawItem){
   };
 }
 
-// 照合状況に応じたオンデマンド一時復号
+// 照合状況に応じたオンデマンド一時復号（RAM内のみ展開）
 async function resolveItemPayload(storedItem, isUnlocked){
   const sec = storedItem.security || 'standard';
-  if(sec === 'standard') return storedItem;
+  
+  if(sec === 'standard'){
+    // STANDARDデータも念のためDataURL形式へ自動整形
+    storedItem.photos = await normalizePhotosToDataUrls(storedItem.photos || (storedItem.photo ? [storedItem.photo] : []));
+    return storedItem;
+  }
 
   if(unlockedPayloadCache.has(storedItem.id)){
     return unlockedPayloadCache.get(storedItem.id);
@@ -656,7 +687,8 @@ async function resolveItemPayload(storedItem, isUnlocked){
       const plainBytes = await decryptWithDeviceKey(deviceMasterKey, storedItem.encryptedFiles);
       const filesB64 = JSON.parse(new TextDecoder().decode(plainBytes));
       const resolvedFiles = filesB64.map(f => ({ name: f.name, blob: base64ToBlob(f.data, f.type) }));
-      const fullItem = { ...storedItem, files: resolvedFiles };
+      const cleanPhotos = await normalizePhotosToDataUrls(storedItem.photos || (storedItem.photo ? [storedItem.photo] : []));
+      const fullItem = { ...storedItem, photos: cleanPhotos, files: resolvedFiles };
       unlockedPayloadCache.set(storedItem.id, fullItem);
       return fullItem;
     } catch(e) {
@@ -669,13 +701,13 @@ async function resolveItemPayload(storedItem, isUnlocked){
     try {
       const plainBytes = await decryptWithDeviceKey(deviceMasterKey, storedItem.encryptedPayload);
       const payload = JSON.parse(new TextDecoder().decode(plainBytes));
-      const resolvedPhotos = payload.photos.map(p => base64ToBlob(p.data, p.type));
       const resolvedFiles = payload.files.map(f => ({ name: f.name, blob: base64ToBlob(f.data, f.type) }));
+      const cleanPhotos = await normalizePhotosToDataUrls(payload.photos || []);
       const fullItem = {
         ...storedItem,
         name: payload.name,
         note: payload.note,
-        photos: resolvedPhotos,
+        photos: cleanPhotos,
         files: resolvedFiles
       };
       unlockedPayloadCache.set(storedItem.id, fullItem);
@@ -690,7 +722,7 @@ async function resolveItemPayload(storedItem, isUnlocked){
 }
 
 function clearFindView(){
-  findBlob = null;
+  findDataUrl = null;
   const finder = document.getElementById('findFinder');
   finder.style.display = 'none';
   document.getElementById('findPreview').src = '';
@@ -734,13 +766,12 @@ async function renderList(){
           <div class="specimen-name" style="color:var(--sub);">保護された標本</div>
         </div>`;
     } else {
-      // 選択された代表サムネイル（primaryIdx）を表示
       const pIdx = (it.primaryIdx !== undefined) ? it.primaryIdx : 0;
       const primaryPhoto = (it.photos && it.photos.length) ? (it.photos[pIdx] || it.photos[0]) : it.photo;
-      const imgUrl = safeObjectUrl(primaryPhoto);
+      const imgSrc = resolvePhotoSrc(primaryPhoto);
       card.innerHTML = `
         <div class="specimen-thumb-wrap">
-          <img class="specimen-thumb" src="${imgUrl}">
+          <img class="specimen-thumb" src="${imgSrc}">
         </div>
         <div class="specimen-meta">
           <div class="specimen-idx">#${padIdx} // ${it.security.toUpperCase()}</div>
@@ -763,14 +794,14 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
   document.getElementById('addSaveBtn').disabled = true;
 
   document.getElementById('addStatus').textContent = 'SQUARE RESAMPLE...';
-  addBlob = await cropCenterSquareAndDownscale(file);
+  addDataUrl = await cropCenterSquareToDataUrl(file);
   
   const finder = document.getElementById('addFinder');
   const img = document.getElementById('addPreview');
-  img.src = safeObjectUrl(addBlob);
+  img.src = addDataUrl;
   finder.style.display = 'block';
 
-  addEmbeddingGroup = await extract4WayEmbeddings(addBlob, (phase)=>{
+  addEmbeddingGroup = await extract4WayEmbeddings(addDataUrl, (phase)=>{
     document.getElementById('addStatus').textContent = `EXTRACTING ROTATION: ${phase}...`;
   });
 
@@ -821,8 +852,8 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   const rawItem = {
     id:'item_'+Date.now()+'_'+Math.random().toString(16).slice(2,8),
     name, note, security, threshold,
-    primaryIdx: 0, // 初期代表写真は先頭
-    photos: [addBlob],
+    primaryIdx: 0,
+    photos: [addDataUrl],
     embeddings: addEmbeddingGroup,
     files:[], createdAt:Date.now()
   };
@@ -830,7 +861,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   const itemToStore = await secureItemForStorage(rawItem);
   await idbPut(itemToStore);
 
-  addBlob=null; addEmbeddingGroup=[]; duplicateCandidateId=null;
+  addDataUrl=null; addEmbeddingGroup=[]; duplicateCandidateId=null;
   document.getElementById('addName').value='';
   document.getElementById('addNote').value='';
   document.getElementById('addSecurity').value='standard';
@@ -847,16 +878,16 @@ document.getElementById('findPhotoBtn').onclick = ()=>document.getElementById('f
 document.getElementById('findPhotoInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
   document.getElementById('findStatus').textContent='SQUARE RESAMPLE...';
-  findBlob = await cropCenterSquareAndDownscale(file);
+  findDataUrl = await cropCenterSquareToDataUrl(file);
   
   const finder = document.getElementById('findFinder');
   const img = document.getElementById('findPreview');
-  img.src = safeObjectUrl(findBlob);
+  img.src = findDataUrl;
   finder.style.display='block';
   document.getElementById('findResult').innerHTML='';
   document.getElementById('findStatus').textContent='CROSS-MATCHING MATRIX...';
   
-  const emb = await embed(findBlob);
+  const emb = await embed(findDataUrl);
   const items = await idbAll();
   
   let best=null, bestScore=-1, passThreshold=false;
@@ -901,11 +932,11 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
         <button class="btn secondary block" id="registerFromFailedBtn">+ REGISTER AS NEW SPECIMEN</button>
       </div>`;
     document.getElementById('registerFromFailedBtn').onclick = async ()=>{
-      addBlob = findBlob;
-      document.getElementById('addPreview').src = img.src;
+      addDataUrl = findDataUrl;
+      document.getElementById('addPreview').src = addDataUrl;
       document.getElementById('addFinder').style.display = 'block';
       document.getElementById('addStatus').textContent = 'EXTRACTING 4-WAY ROTATION...';
-      addEmbeddingGroup = await extract4WayEmbeddings(addBlob);
+      addEmbeddingGroup = await extract4WayEmbeddings(addDataUrl);
       document.getElementById('addStatus').textContent = 'ROTATION INVARIANCE READY.';
       document.getElementById('addSaveBtn').disabled = false;
       showView('add');
@@ -913,7 +944,7 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   }
 };
 
-// 詳細表示
+// 詳細表示（過去のいかなるデータも自動修復）
 async function openDetail(id, focusPhotoIdx = null){
   currentDetailId = id;
   document.getElementById('detailSaveStatus').textContent = '';
@@ -925,11 +956,11 @@ async function openDetail(id, focusPhotoIdx = null){
   const it = loadedDetailItem;
   const sec = it.security || 'standard';
 
-  if(!it.photos && it.photo) it.photos = [it.photo];
+  // 過去データの写真・ベクトル配列を自動補正
+  it.photos = await normalizePhotosToDataUrls(it.photos || (it.photo ? [it.photo] : []));
   if(!it.embeddings && it.embedding) it.embeddings = [it.embedding];
   if(it.primaryIdx === undefined) it.primaryIdx = 0;
 
-  // フォーカスする写真を決定（指定があれば優先、なければ代表写真）
   currentActivePhotoIdx = (focusPhotoIdx !== null) ? focusPhotoIdx : it.primaryIdx;
 
   const lockNotice = document.getElementById('detailLockNotice');
@@ -967,7 +998,7 @@ async function openDetail(id, focusPhotoIdx = null){
       filesCard.style.display = 'none';
     } else if(sec === 'file-lock'){
       const activePhoto = it.photos[currentActivePhotoIdx] || it.photos[0];
-      photoEl.src = safeObjectUrl(activePhoto);
+      photoEl.src = resolvePhotoSrc(activePhoto);
       finderEl.style.display = 'block';
       anglesCard.style.display = 'block';
       renderDetailAngles(it);
@@ -981,7 +1012,7 @@ async function openDetail(id, focusPhotoIdx = null){
     lockNotice.style.display = 'none';
     
     const activePhoto = it.photos[currentActivePhotoIdx] || it.photos[0];
-    photoEl.src = safeObjectUrl(activePhoto);
+    photoEl.src = resolvePhotoSrc(activePhoto);
     finderEl.style.display = 'block';
     anglesCard.style.display = 'block';
     
@@ -1030,7 +1061,6 @@ function updateSetPrimaryButtonState(){
 
 document.getElementById('detailBack').onclick = ()=>showView('list');
 
-// 代表写真（サムネイル）に設定する処理
 document.getElementById('detailSetPrimaryBtn').onclick = async ()=>{
   if(!loadedDetailItem) return;
   const isUnlocked = unlockedSessions.has(loadedDetailItem.id);
@@ -1041,17 +1071,14 @@ document.getElementById('detailSetPrimaryBtn').onclick = async ()=>{
 
   loadedDetailItem.primaryIdx = currentActivePhotoIdx;
   
-  // ストレージとキャッシュに保存
   const securedItem = await secureItemForStorage(loadedDetailItem);
   await idbPut(securedItem);
   unlockedPayloadCache.set(loadedDetailItem.id, loadedDetailItem);
 
-  // 表示の更新
   renderDetailAngles(loadedDetailItem);
   updateSetPrimaryButtonState();
 };
 
-// 変更の確定コミット処理
 document.getElementById('detailSaveBtn').onclick = async ()=>{
   if(!loadedDetailItem) return;
   const saveBtn = document.getElementById('detailSaveBtn');
@@ -1104,16 +1131,15 @@ function renderDetailAngles(it){
   const isProtectedAndLocked = (it.security !== 'standard') && !isUnlocked;
   const primaryIdx = it.primaryIdx || 0;
 
-  it.photos.forEach((blobSource, idx)=>{
+  it.photos.forEach((photoSrc, idx)=>{
     const wrap = document.createElement('div');
     wrap.className = 'angle-thumb-wrap' + (idx === currentActivePhotoIdx ? ' active' : '');
     
     const img = document.createElement('img');
     img.className = 'angle-thumb';
-    img.src = safeObjectUrl(blobSource);
+    img.src = resolvePhotoSrc(photoSrc);
     wrap.appendChild(img);
 
-    // 代表サムネイルであればタグを表示
     if(idx === primaryIdx){
       const badge = document.createElement('div');
       badge.className = 'angle-primary-badge';
@@ -1124,7 +1150,7 @@ function renderDetailAngles(it){
     wrap.onclick = (e)=>{
       if (e.target.classList.contains('angle-del-btn')) return;
       currentActivePhotoIdx = idx;
-      photoEl.src = safeObjectUrl(blobSource);
+      photoEl.src = resolvePhotoSrc(photoSrc);
       document.querySelectorAll('.angle-thumb-wrap').forEach((el, i)=>{
         el.classList.toggle('active', i === idx);
       });
@@ -1140,7 +1166,6 @@ function renderDetailAngles(it){
         it.photos.splice(idx, 1);
         it.embeddings.splice(idx * 4, 4);
 
-        // 削除対象が代表写真だった場合、代表を先頭にリセット
         if(it.primaryIdx === idx){
           it.primaryIdx = 0;
         } else if(it.primaryIdx > idx){
@@ -1178,21 +1203,24 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
 
   try {
     const it = loadedDetailItem;
-    if(!it.photos) it.photos = [it.photo];
+    // 既存の写真を安全にDataURL配列へ統一修復
+    it.photos = await normalizePhotosToDataUrls(it.photos || (it.photo ? [it.photo] : []));
     if(!it.embeddings) it.embeddings = [it.embedding];
 
     statusEl.textContent = 'RESAMPLING...';
-    const newBlob = await cropCenterSquareAndDownscale(file);
+    const newDataUrl = await cropCenterSquareToDataUrl(file);
 
-    const newEmbs = await extract4WayEmbeddings(newBlob, (phase)=>{
+    const newEmbs = await extract4WayEmbeddings(newDataUrl, (phase)=>{
       statusEl.textContent = `ADDING KEY // ${phase}...`;
     });
 
-    it.photos.push(newBlob);
+    it.photos.push(newDataUrl);
     it.embeddings.push(...newEmbs);
     
     unlockedPayloadCache.set(it.id, it);
     await idbPut(await secureItemForStorage(it));
+    
+    // 追加した最新キーを選択・即座に大きく表示
     openDetail(it.id, it.photos.length - 1);
   } catch(err) {
     console.error('Add key failed:', err);
@@ -1287,11 +1315,8 @@ async function exportItemsEncrypted(rawItems, defaultFileName){
     const files = [];
     for(const f of (it.files||[])) files.push({name:f.name, type:f.blob.type, data: await blobToBase64(f.blob)});
     
-    const photosSrc = (it.photos && it.photos.length) ? it.photos : [it.photo];
-    const photosB64 = [];
-    for(const p of photosSrc){
-      photosB64.push({ type: p.type, data: await blobToBase64(p) });
-    }
+    // 写真データを純粋なDataURL配列に確実にマイグレーション
+    const cleanPhotos = await normalizePhotosToDataUrls(it.photos || (it.photo ? [it.photo] : []));
 
     serial.push({
       id: it.id,
@@ -1302,7 +1327,7 @@ async function exportItemsEncrypted(rawItems, defaultFileName){
       primaryIdx: it.primaryIdx !== undefined ? it.primaryIdx : 0,
       embeddings: it.embeddings || [it.embedding],
       createdAt: it.createdAt,
-      photos: photosB64,
+      photos: cleanPhotos,
       files
     });
   }
@@ -1339,13 +1364,7 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
     const plain = await decryptBytes(password, bytes);
     const serial = JSON.parse(new TextDecoder().decode(plain));
     for(const it of serial){
-      let photos = [];
-      if(it.photos && it.photos.length){
-        photos = it.photos.map(p => base64ToBlob(p.data, p.type));
-      } else if(it.photo) {
-        photos = [base64ToBlob(it.photo, it.photoType)];
-      }
-
+      const cleanPhotos = await normalizePhotosToDataUrls(it.photos || (it.photo ? [it.photo] : []));
       const files = (it.files||[]).map(f=>({name:f.name, blob: base64ToBlob(f.data, f.type)}));
       const rawRestored = {
         id: it.id,
@@ -1355,7 +1374,7 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
         threshold: it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD,
         primaryIdx: it.primaryIdx !== undefined ? it.primaryIdx : 0,
         embeddings: it.embeddings || [it.embedding],
-        photos,
+        photos: cleanPhotos,
         files,
         createdAt: it.createdAt
       };
