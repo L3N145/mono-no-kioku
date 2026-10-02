@@ -141,7 +141,7 @@ label.field-label{
 }
 .finder-box img{width:100%;height:100%;object-fit:cover;}
 .finder-box::before, .finder-box::after{
-  content:"";position:absolute;width:16px;height:16px;pointer-events:none;
+  content:"";position:absolute;width:16px;height:16px;pointer-events:none;z-index:2;
 }
 .finder-box::before{
   top:12px;left:12px;border-top:2px solid rgba(255,255,255,0.7);border-left:2px solid rgba(255,255,255,0.7);
@@ -151,7 +151,7 @@ label.field-label{
 }
 .finder-crosshair{
   position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:16px;height:16px;pointer-events:none;
+  width:16px;height:16px;pointer-events:none;z-index:2;
 }
 .finder-crosshair::before{content:"";position:absolute;top:7px;left:0;right:0;height:1px;background:rgba(255,255,255,0.4);}
 .finder-crosshair::after{content:"";position:absolute;left:7px;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.4);}
@@ -167,13 +167,20 @@ label.field-label{
 }
 .warn-box .title{font-family:var(--mono);font-weight:600;margin-bottom:4px;}
 
+/* アングルサムネイル一覧 */
 .angle-strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:8px 0 12px;}
-.angle-thumb-wrap{position:relative;width:56px;height:56px;flex-shrink:0;background:var(--bg);}
-.angle-thumb{width:100%;height:100%;object-fit:cover;border:1px solid var(--line);}
+.angle-thumb-wrap{
+  position:relative;width:58px;height:58px;flex-shrink:0;background:var(--bg);
+  border:2px solid transparent;cursor:pointer;transition:border-color 0.15s;
+}
+.angle-thumb-wrap.active{
+  border-color:var(--line-strong);
+}
+.angle-thumb{width:100%;height:100%;object-fit:cover;}
 .angle-del-btn{
   position:absolute;top:0;right:0;width:16px;height:16px;border-radius:0;
   background:var(--danger);color:#fff;border:none;font-size:9px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;
+  display:flex;align-items:center;justify-content:center;z-index:3;
 }
 .file-row{
   display:flex;justify-content:space-between;align-items:center;
@@ -275,14 +282,15 @@ label.field-label{
     </div>
 
     <div class="panel">
+      <!-- メインファインダー（サムネイルタップで切り替え表示） -->
       <div id="detailFinder" class="finder-box" style="display:block;">
         <img id="detailPhoto">
       </div>
       
       <div id="detailAnglesCard">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <label class="field-label" style="margin:0;">REGISTERED ANGLES</label>
-          <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 8px;font-size:10px;">+ ADD ANGLE</button>
+          <label class="field-label" style="margin:0;">REGISTERED KEYS / ANGLES</label>
+          <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 8px;font-size:10px;">+ ADD KEY</button>
         </div>
         <p class="status-mono" id="detailAngleStatus" style="display:none;"></p>
         <input type="file" accept="image/*" capture="environment" id="detailAddAngleInput" style="display:none;">
@@ -343,6 +351,7 @@ const DUPLICATE_THRESHOLD = 0.82;
 let db, extractor, deviceMasterKey=null;
 let addBlob=null, addEmbeddingGroup=[], findBlob=null, currentDetailId=null;
 let duplicateCandidateId = null;
+let currentActivePhotoIdx = 0; // 詳細画面で現在プレビュー中の写真インデックス
 
 const unlockedSessions = new Set();
 const unlockedPayloadCache = new Map();
@@ -416,7 +425,6 @@ async function decryptWithDeviceKey(key, cipherBytes){
   return new Uint8Array(plain);
 }
 
-// どんな形式（Blob/Base64/破損値）でも安全に画像URLを生成する防壁関数（はてなマーク防止）
 function safeObjectUrl(source){
   if (!source) return '';
   try {
@@ -436,7 +444,6 @@ function safeObjectUrl(source){
   return '';
 }
 
-// 中央正方形クロップ（歪みゼロ化）
 async function cropCenterSquareAndDownscale(file, size = 800, quality = 0.85){
   const bmp = await createImageBitmap(file);
   const minSide = Math.min(bmp.width, bmp.height);
@@ -452,7 +459,6 @@ async function cropCenterSquareAndDownscale(file, size = 800, quality = 0.85){
   return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
 }
 
-// 1枚の写真から 90度・180度・270度の回転バリエーションを生成（回転耐性用）
 async function generateRotatedBlobs(squareBlob){
   const bmp = await createImageBitmap(squareBlob);
   const size = bmp.width;
@@ -474,7 +480,6 @@ async function generateRotatedBlobs(squareBlob){
   return results;
 }
 
-// DINOによる「ハイブリッド特徴抽出（[CLS] ＋ パッチ平均合成）」
 async function embed(blob){
   const url = URL.createObjectURL(blob);
   try {
@@ -512,7 +517,6 @@ async function embed(blob){
   }
 }
 
-// 0°, 90°, 180°, 270° の4方向ベクトルを一括生成する関数
 async function extract4WayEmbeddings(baseBlob, progressCb){
   const embeddings = [];
   
@@ -554,7 +558,6 @@ function base64ToBlob(b64, type){
   return new Blob([arr], {type});
 }
 
-// 記録オブジェクトの安静時暗号化（DB保存前）
 async function secureItemForStorage(rawItem){
   const sec = rawItem.security || 'standard';
   if(sec === 'standard'){
@@ -603,7 +606,6 @@ async function secureItemForStorage(rawItem){
   };
 }
 
-// 照合成功時のオンデマンド一時復号（RAM内のみ展開）
 async function resolveItemPayload(storedItem, isUnlocked){
   const sec = storedItem.security || 'standard';
   if(sec === 'standard') return storedItem;
@@ -716,7 +718,7 @@ async function renderList(){
 }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
 
-// 登録処理（4方向回転ベクトル自動抽出）
+// 登録処理
 document.getElementById('addPhotoBtn').onclick = ()=>document.getElementById('addPhotoInput').click();
 document.getElementById('addPhotoInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
@@ -733,15 +735,13 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
   img.src = safeObjectUrl(addBlob);
   finder.style.display = 'block';
 
-  // 0°, 90°, 180°, 270° の4方向ベクトルを自動生成
   addEmbeddingGroup = await extract4WayEmbeddings(addBlob, (phase)=>{
     document.getElementById('addStatus').textContent = `EXTRACTING ROTATION: ${phase}...`;
   });
 
-  // 重複確認（既存アイテムの各ベクトルと比較）
   const items = await idbAll();
   let maxScore = -1, candidate = null;
-  const baseEmb = addEmbeddingGroup[0]; // 0°ベクトルで衝突検知
+  const baseEmb = addEmbeddingGroup[0];
 
   for(const it of items){
     const embs = it.embeddings || [it.embedding];
@@ -787,7 +787,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
     id:'item_'+Date.now()+'_'+Math.random().toString(16).slice(2,8),
     name, note, security, threshold,
     photos: [addBlob],
-    embeddings: addEmbeddingGroup, // 4方向のベクトルを格納
+    embeddings: addEmbeddingGroup,
     files:[], createdAt:Date.now()
   };
 
@@ -806,7 +806,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   showView('list');
 };
 
-// 照合処理（スキャン側は1回の推論のみで超高速動作）
+// 照合処理
 document.getElementById('findPhotoBtn').onclick = ()=>document.getElementById('findPhotoInput').click();
 document.getElementById('findPhotoInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
@@ -878,8 +878,9 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
 };
 
 // 詳細表示
-async function openDetail(id){
+async function openDetail(id, focusPhotoIdx = 0){
   currentDetailId = id;
+  currentActivePhotoIdx = focusPhotoIdx;
   const storedItem = await idbGet(id);
   const isUnlocked = unlockedSessions.has(id);
   
@@ -914,9 +915,13 @@ async function openDetail(id){
     filesCard.style.display = 'none';
   } else {
     lockNotice.style.display = (sec !== 'standard' && !isUnlocked) ? 'block' : 'none';
-    photoEl.src = safeObjectUrl(it.photos[0]);
+    
+    // 現在選択されているキー画像をメインプレビューに表示
+    const activePhoto = it.photos[currentActivePhotoIdx] || it.photos[0];
+    photoEl.src = safeObjectUrl(activePhoto);
     finderEl.style.display = 'block';
     anglesCard.style.display = 'block';
+    
     renderDetailAngles(it);
 
     nameEl.textContent = it.name;
@@ -959,29 +964,42 @@ document.getElementById('detailThreshold').onchange = async (e)=>{
   await idbPut(await secureItemForStorage(it));
 };
 
-// アングル一覧の描画（はてなマーク完全根絶）
+// サムネイル一覧の描画（タップでメインプレビュー切り替え対応）
 function renderDetailAngles(it){
   const strip = document.getElementById('detailAngleStrip');
   strip.innerHTML = '';
+  const photoEl = document.getElementById('detailPhoto');
+
   it.photos.forEach((blobSource, idx)=>{
     const wrap = document.createElement('div');
-    wrap.className = 'angle-thumb-wrap';
+    wrap.className = 'angle-thumb-wrap' + (idx === currentActivePhotoIdx ? ' active' : '');
+    
     const img = document.createElement('img');
     img.className = 'angle-thumb';
     img.src = safeObjectUrl(blobSource);
     wrap.appendChild(img);
 
+    // サムネイルタップでメインファインダーの画像を切り替え
+    wrap.onclick = (e)=>{
+      if (e.target.classList.contains('angle-del-btn')) return;
+      currentActivePhotoIdx = idx;
+      photoEl.src = safeObjectUrl(blobSource);
+      document.querySelectorAll('.angle-thumb-wrap').forEach((el, i)=>{
+        el.classList.toggle('active', i === idx);
+      });
+    };
+
     if(it.photos.length > 1){
       const delBtn = document.createElement('button');
       delBtn.className = 'angle-del-btn';
       delBtn.textContent = '×';
-      delBtn.onclick = async ()=>{
+      delBtn.onclick = async (e)=>{
+        e.stopPropagation();
         it.photos.splice(idx, 1);
-        // 1つのアングルにつき4つの回転ベクトルが紐づいているため4件削除
         it.embeddings.splice(idx * 4, 4);
         unlockedPayloadCache.set(it.id, it);
         await idbPut(await secureItemForStorage(it));
-        openDetail(it.id);
+        openDetail(it.id, 0); // 削除後は先頭プレビューに戻す
       };
       wrap.appendChild(delBtn);
     }
@@ -989,7 +1007,7 @@ function renderDetailAngles(it){
   });
 }
 
-// 別アングル追加（進捗インジケータ付き・4方向回転耐性付き）
+// 別キー（アングル）追加処理
 document.getElementById('detailAddAngleBtn').onclick = ()=>document.getElementById('detailAddAngleInput').click();
 document.getElementById('detailAddAngleInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
@@ -1008,9 +1026,8 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
     statusEl.textContent = 'RESAMPLING...';
     const newBlob = await cropCenterSquareAndDownscale(file);
 
-    // 0°, 90°, 180°, 270° の4方向ベクトルを追加
     const newEmbs = await extract4WayEmbeddings(newBlob, (phase)=>{
-      statusEl.textContent = `ADDING ANGLE // ${phase}...`;
+      statusEl.textContent = `ADDING KEY // ${phase}...`;
     });
 
     it.photos.push(newBlob);
@@ -1018,10 +1035,12 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
     
     unlockedPayloadCache.set(it.id, it);
     await idbPut(await secureItemForStorage(it));
-    openDetail(it.id);
+    
+    // 追加した最新キーを選択・大きくプレビュー表示
+    openDetail(it.id, it.photos.length - 1);
   } catch(err) {
-    console.error('Add angle failed:', err);
-    alert('アングル追加に失敗しました。');
+    console.error('Add key failed:', err);
+    alert('キーの追加に失敗しました。');
   } finally {
     addBtn.disabled = false;
     statusEl.style.display = 'none';
@@ -1068,7 +1087,7 @@ document.getElementById('detailFileInput').onchange = async (e)=>{
   e.target.value='';
 };
 
-// パスワードによる外部暗号化エクスポート
+// 暗号化エクスポート
 async function deriveKey(password, salt){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
