@@ -181,6 +181,10 @@ label.field-label{
   background:var(--danger);color:#fff;border:none;font-size:9px;cursor:pointer;
   display:flex;align-items:center;justify-content:center;z-index:3;
 }
+.angle-primary-badge{
+  position:absolute;bottom:0;left:0;background:var(--accent);color:var(--accent-ink);
+  font-family:var(--mono);font-size:8px;padding:1px 3px;letter-spacing:0.04em;z-index:2;
+}
 .file-row{
   display:flex;justify-content:space-between;align-items:center;
   padding:10px 0;border-bottom:1px solid var(--line);font-size:12px;
@@ -276,8 +280,8 @@ label.field-label{
     <button class="btn secondary" id="detailBack" style="margin-bottom:14px;padding:6px 12px;font-size:11px;">← RETURN TO INDEX</button>
     
     <div id="detailLockNotice" class="warn-box" style="display:none;">
-      <div class="title">RESTRICTED & ENCRYPTED</div>
-      現物照合が行われていないため、データは暗号化されたまま保護されています。変更を行うには現物をスキャンしてください。
+      <div class="title">RESTRICTED & LOCKED</div>
+      現物照合が行われていないため、データおよび保護設定はロックされています。保護設定やファイルの操作を行うには、現物をスキャンしてください。
     </div>
 
     <div class="panel">
@@ -288,7 +292,10 @@ label.field-label{
       <div id="detailAnglesCard">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <label class="field-label" style="margin:0;">REGISTERED KEYS / ANGLES</label>
-          <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 8px;font-size:10px;">+ ADD KEY</button>
+          <div style="display:flex;gap:6px;">
+            <button class="btn secondary" id="detailSetPrimaryBtn" style="padding:4px 8px;font-size:10px;">[ SET AS PRIMARY ]</button>
+            <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 8px;font-size:10px;">+ ADD KEY</button>
+          </div>
         </div>
         <p class="status-mono" id="detailAngleStatus" style="display:none;"></p>
         <input type="file" accept="image/*" capture="environment" id="detailAddAngleInput" style="display:none;">
@@ -316,7 +323,6 @@ label.field-label{
         <option value="0.70">0.70 [TOLERANT]</option>
       </select>
 
-      <!-- 確定・変更保存ボタン -->
       <button class="btn block" id="detailSaveBtn" style="margin-top:8px;">COMMIT CHANGES</button>
       <p class="status-mono" id="detailSaveStatus"></p>
     </div>
@@ -355,7 +361,7 @@ let db, extractor, deviceMasterKey=null;
 let addBlob=null, addEmbeddingGroup=[], findBlob=null, currentDetailId=null;
 let duplicateCandidateId = null;
 let currentActivePhotoIdx = 0;
-let loadedDetailItem = null; // 現在詳細画面で編集中・メモリ保持している平文オブジェクト
+let loadedDetailItem = null;
 
 const unlockedSessions = new Set();
 const unlockedPayloadCache = new Map();
@@ -563,23 +569,23 @@ function base64ToBlob(b64, type){
 // 記録オブジェクトの安静時暗号化（DB保存前）
 async function secureItemForStorage(rawItem){
   const sec = rawItem.security || 'standard';
+  const primaryIdx = rawItem.primaryIdx !== undefined ? rawItem.primaryIdx : 0;
   
-  // 完全平文保存（STANDARD）
   if(sec === 'standard'){
     return {
       id: rawItem.id,
       security: 'standard',
       threshold: rawItem.threshold,
+      primaryIdx: primaryIdx,
       embeddings: rawItem.embeddings,
       createdAt: rawItem.createdAt,
       name: rawItem.name,
       note: rawItem.note || '',
-      photos: rawItem.photos, // Blob配列
+      photos: rawItem.photos,
       files: rawItem.files || []
     };
   }
 
-  // 暗号化直列化
   const photosB64 = [];
   for(const p of rawItem.photos){
     photosB64.push({ type: p.type, data: await blobToBase64(p) });
@@ -596,17 +602,18 @@ async function secureItemForStorage(rawItem){
       id: rawItem.id,
       security: 'file-lock',
       threshold: rawItem.threshold,
+      primaryIdx: primaryIdx,
       embeddings: rawItem.embeddings,
       createdAt: rawItem.createdAt,
       name: rawItem.name,
       note: rawItem.note || '',
       photos: rawItem.photos,
-      files: [], // 平文領域からは消去
+      files: [],
       encryptedFiles: encryptedFiles
     };
   }
 
-  // MASKED または HIDDEN: 外観・内容を完全暗号化
+  // MASKED または HIDDEN
   const sensitivePayload = {
     name: rawItem.name,
     note: rawItem.note || '',
@@ -620,6 +627,7 @@ async function secureItemForStorage(rawItem){
     id: rawItem.id,
     security: sec,
     threshold: rawItem.threshold,
+    primaryIdx: primaryIdx,
     embeddings: rawItem.embeddings,
     createdAt: rawItem.createdAt,
     name: '[RESTRICTED]',
@@ -630,7 +638,7 @@ async function secureItemForStorage(rawItem){
   };
 }
 
-// 照合状況に応じたオンデマンド一時復号（RAM内のみ展開）
+// 照合状況に応じたオンデマンド一時復号
 async function resolveItemPayload(storedItem, isUnlocked){
   const sec = storedItem.security || 'standard';
   if(sec === 'standard') return storedItem;
@@ -726,7 +734,9 @@ async function renderList(){
           <div class="specimen-name" style="color:var(--sub);">保護された標本</div>
         </div>`;
     } else {
-      const primaryPhoto = (it.photos && it.photos.length) ? it.photos[0] : it.photo;
+      // 選択された代表サムネイル（primaryIdx）を表示
+      const pIdx = (it.primaryIdx !== undefined) ? it.primaryIdx : 0;
+      const primaryPhoto = (it.photos && it.photos.length) ? (it.photos[pIdx] || it.photos[0]) : it.photo;
       const imgUrl = safeObjectUrl(primaryPhoto);
       card.innerHTML = `
         <div class="specimen-thumb-wrap">
@@ -811,6 +821,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   const rawItem = {
     id:'item_'+Date.now()+'_'+Math.random().toString(16).slice(2,8),
     name, note, security, threshold,
+    primaryIdx: 0, // 初期代表写真は先頭
     photos: [addBlob],
     embeddings: addEmbeddingGroup,
     files:[], createdAt:Date.now()
@@ -902,22 +913,24 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   }
 };
 
-// 詳細表示（一元化された安全な初期化）
-async function openDetail(id, focusPhotoIdx = 0){
+// 詳細表示
+async function openDetail(id, focusPhotoIdx = null){
   currentDetailId = id;
-  currentActivePhotoIdx = focusPhotoIdx;
   document.getElementById('detailSaveStatus').textContent = '';
 
   const storedItem = await idbGet(id);
   const isUnlocked = unlockedSessions.has(id);
   
-  // RAM上に完全な平文データとして保持
   loadedDetailItem = await resolveItemPayload(storedItem, isUnlocked);
   const it = loadedDetailItem;
   const sec = it.security || 'standard';
 
   if(!it.photos && it.photo) it.photos = [it.photo];
   if(!it.embeddings && it.embedding) it.embeddings = [it.embedding];
+  if(it.primaryIdx === undefined) it.primaryIdx = 0;
+
+  // フォーカスする写真を決定（指定があれば優先、なければ代表写真）
+  currentActivePhotoIdx = (focusPhotoIdx !== null) ? focusPhotoIdx : it.primaryIdx;
 
   const lockNotice = document.getElementById('detailLockNotice');
   const finderEl = document.getElementById('detailFinder');
@@ -927,30 +940,45 @@ async function openDetail(id, focusPhotoIdx = 0){
   const secSelect = document.getElementById('detailSecuritySelect');
   const thSelect = document.getElementById('detailThresholdSelect');
   const saveBtn = document.getElementById('detailSaveBtn');
+  const setPrimaryBtn = document.getElementById('detailSetPrimaryBtn');
   const anglesCard = document.getElementById('detailAnglesCard');
   const filesCard = document.getElementById('detailFilesCard');
 
-  // 閾値のフォーマット正規化（"0.7" -> "0.70"）
   const currentTh = (it.threshold !== undefined ? parseFloat(it.threshold) : DEFAULT_THRESHOLD).toFixed(2);
   secSelect.value = sec;
   thSelect.value = currentTh;
 
-  if((sec === 'masked' || sec === 'hidden') && !isUnlocked){
-    // 未照合時は完全ロック
+  const isProtectedAndLocked = (sec !== 'standard') && !isUnlocked;
+
+  if(isProtectedAndLocked){
     lockNotice.style.display = 'block';
-    finderEl.style.display = 'none';
-    anglesCard.style.display = 'none';
-    nameInput.value = '[RESTRICTED]';
-    nameInput.disabled = true;
-    noteInput.value = '';
-    noteInput.disabled = true;
     secSelect.disabled = true;
-    thSelect.disabled = true;
     saveBtn.disabled = true;
-    filesCard.style.display = 'none';
+    thSelect.disabled = true;
+    setPrimaryBtn.disabled = true;
+
+    if(sec === 'masked' || sec === 'hidden'){
+      finderEl.style.display = 'none';
+      anglesCard.style.display = 'none';
+      nameInput.value = '[RESTRICTED]';
+      nameInput.disabled = true;
+      noteInput.value = '';
+      noteInput.disabled = true;
+      filesCard.style.display = 'none';
+    } else if(sec === 'file-lock'){
+      const activePhoto = it.photos[currentActivePhotoIdx] || it.photos[0];
+      photoEl.src = safeObjectUrl(activePhoto);
+      finderEl.style.display = 'block';
+      anglesCard.style.display = 'block';
+      renderDetailAngles(it);
+      nameInput.value = it.name || '';
+      nameInput.disabled = true;
+      noteInput.value = it.note || '';
+      noteInput.disabled = true;
+      filesCard.style.display = 'none';
+    }
   } else {
-    // 編集可能状態
-    lockNotice.style.display = (sec !== 'standard' && !isUnlocked) ? 'block' : 'none';
+    lockNotice.style.display = 'none';
     
     const activePhoto = it.photos[currentActivePhotoIdx] || it.photos[0];
     photoEl.src = safeObjectUrl(activePhoto);
@@ -967,12 +995,10 @@ async function openDetail(id, focusPhotoIdx = 0){
     thSelect.disabled = false;
     saveBtn.disabled = false;
 
-    if(sec === 'file-lock' && !isUnlocked){
-      filesCard.style.display = 'none';
-    } else {
-      filesCard.style.display = 'block';
-      renderDetailFiles(it.files||[]);
-    }
+    updateSetPrimaryButtonState();
+
+    filesCard.style.display = 'block';
+    renderDetailFiles(it.files||[]);
   }
 
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
@@ -980,13 +1006,65 @@ async function openDetail(id, focusPhotoIdx = 0){
   document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
 }
 
+function updateSetPrimaryButtonState(){
+  const btn = document.getElementById('detailSetPrimaryBtn');
+  if(!loadedDetailItem) return;
+  const isUnlocked = unlockedSessions.has(loadedDetailItem.id);
+  const isProtectedAndLocked = (loadedDetailItem.security !== 'standard') && !isUnlocked;
+  
+  if(isProtectedAndLocked){
+    btn.disabled = true;
+    btn.textContent = '[ SET AS PRIMARY ]';
+    return;
+  }
+
+  const currentPrimary = loadedDetailItem.primaryIdx || 0;
+  if(currentActivePhotoIdx === currentPrimary){
+    btn.disabled = true;
+    btn.textContent = '[ PRIMARY KEY ]';
+  } else {
+    btn.disabled = false;
+    btn.textContent = '[ SET AS PRIMARY ]';
+  }
+}
+
 document.getElementById('detailBack').onclick = ()=>showView('list');
 
-// 変更の確定コミット処理（ボタン押下による一括安全保存）
+// 代表写真（サムネイル）に設定する処理
+document.getElementById('detailSetPrimaryBtn').onclick = async ()=>{
+  if(!loadedDetailItem) return;
+  const isUnlocked = unlockedSessions.has(loadedDetailItem.id);
+  if(loadedDetailItem.security !== 'standard' && !isUnlocked){
+    alert('代表写真を変更するには、現物をスキャンして認証してください。');
+    return;
+  }
+
+  loadedDetailItem.primaryIdx = currentActivePhotoIdx;
+  
+  // ストレージとキャッシュに保存
+  const securedItem = await secureItemForStorage(loadedDetailItem);
+  await idbPut(securedItem);
+  unlockedPayloadCache.set(loadedDetailItem.id, loadedDetailItem);
+
+  // 表示の更新
+  renderDetailAngles(loadedDetailItem);
+  updateSetPrimaryButtonState();
+};
+
+// 変更の確定コミット処理
 document.getElementById('detailSaveBtn').onclick = async ()=>{
   if(!loadedDetailItem) return;
   const saveBtn = document.getElementById('detailSaveBtn');
   const statusEl = document.getElementById('detailSaveStatus');
+
+  const isUnlocked = unlockedSessions.has(loadedDetailItem.id);
+  const currentSec = loadedDetailItem.security || 'standard';
+  const newSecurity = document.getElementById('detailSecuritySelect').value;
+
+  if(currentSec !== 'standard' && !isUnlocked && newSecurity === 'standard'){
+    alert('保護設定を解除するには、現物をスキャンして認証を完了してください。');
+    return;
+  }
 
   saveBtn.disabled = true;
   statusEl.textContent = 'COMMITTING CHANGES...';
@@ -994,26 +1072,21 @@ document.getElementById('detailSaveBtn').onclick = async ()=>{
   try {
     const newName = document.getElementById('detailNameInput').value.trim() || 'SPECIMEN_' + Date.now();
     const newNote = document.getElementById('detailNoteInput').value.trim();
-    const newSecurity = document.getElementById('detailSecuritySelect').value;
     const newThreshold = parseFloat(document.getElementById('detailThresholdSelect').value) || DEFAULT_THRESHOLD;
 
-    // メモリ上の完全データを更新
     loadedDetailItem.name = newName;
     loadedDetailItem.note = newNote;
     loadedDetailItem.security = newSecurity;
     loadedDetailItem.threshold = newThreshold;
 
-    // 新しい保護レベルに応じて安全に暗号化（または平文化）してIndexedDBへ格納
     const securedItem = await secureItemForStorage(loadedDetailItem);
     await idbPut(securedItem);
 
-    // RAMキャッシュを更新
     unlockedPayloadCache.set(loadedDetailItem.id, loadedDetailItem);
 
     statusEl.textContent = 'CHANGES COMMITTED SUCCESSFULLY.';
     setTimeout(()=>{ statusEl.textContent = ''; }, 2000);
 
-    // 画面状態をリフレッシュ
     openDetail(loadedDetailItem.id, currentActivePhotoIdx);
   } catch(err) {
     console.error('Commit failed:', err);
@@ -1027,6 +1100,9 @@ function renderDetailAngles(it){
   const strip = document.getElementById('detailAngleStrip');
   strip.innerHTML = '';
   const photoEl = document.getElementById('detailPhoto');
+  const isUnlocked = unlockedSessions.has(it.id);
+  const isProtectedAndLocked = (it.security !== 'standard') && !isUnlocked;
+  const primaryIdx = it.primaryIdx || 0;
 
   it.photos.forEach((blobSource, idx)=>{
     const wrap = document.createElement('div');
@@ -1037,6 +1113,14 @@ function renderDetailAngles(it){
     img.src = safeObjectUrl(blobSource);
     wrap.appendChild(img);
 
+    // 代表サムネイルであればタグを表示
+    if(idx === primaryIdx){
+      const badge = document.createElement('div');
+      badge.className = 'angle-primary-badge';
+      badge.textContent = 'MAIN';
+      wrap.appendChild(badge);
+    }
+
     wrap.onclick = (e)=>{
       if (e.target.classList.contains('angle-del-btn')) return;
       currentActivePhotoIdx = idx;
@@ -1044,9 +1128,10 @@ function renderDetailAngles(it){
       document.querySelectorAll('.angle-thumb-wrap').forEach((el, i)=>{
         el.classList.toggle('active', i === idx);
       });
+      updateSetPrimaryButtonState();
     };
 
-    if(it.photos.length > 1){
+    if(it.photos.length > 1 && !isProtectedAndLocked){
       const delBtn = document.createElement('button');
       delBtn.className = 'angle-del-btn';
       delBtn.textContent = '×';
@@ -1054,6 +1139,14 @@ function renderDetailAngles(it){
         e.stopPropagation();
         it.photos.splice(idx, 1);
         it.embeddings.splice(idx * 4, 4);
+
+        // 削除対象が代表写真だった場合、代表を先頭にリセット
+        if(it.primaryIdx === idx){
+          it.primaryIdx = 0;
+        } else if(it.primaryIdx > idx){
+          it.primaryIdx -= 1;
+        }
+
         unlockedPayloadCache.set(it.id, it);
         await idbPut(await secureItemForStorage(it));
         openDetail(it.id, 0);
@@ -1064,7 +1157,16 @@ function renderDetailAngles(it){
   });
 }
 
-document.getElementById('detailAddAngleBtn').onclick = ()=>document.getElementById('detailAddAngleInput').click();
+document.getElementById('detailAddAngleBtn').onclick = ()=>{
+  if(!loadedDetailItem) return;
+  const isUnlocked = unlockedSessions.has(loadedDetailItem.id);
+  if(loadedDetailItem.security !== 'standard' && !isUnlocked){
+    alert('キーを追加するには、事前に現物をスキャンして認証してください。');
+    return;
+  }
+  document.getElementById('detailAddAngleInput').click();
+};
+
 document.getElementById('detailAddAngleInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
   e.target.value = '';
@@ -1102,6 +1204,12 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
 };
 
 document.getElementById('detailDeleteBtn').onclick = async ()=>{
+  if(!loadedDetailItem) return;
+  const isUnlocked = unlockedSessions.has(loadedDetailItem.id);
+  if(loadedDetailItem.security !== 'standard' && !isUnlocked){
+    alert('記録を削除するには、事前に現物をスキャンして認証してください。');
+    return;
+  }
   if(confirm('この標本データを完全に消去しますか？')){
     unlockedSessions.delete(currentDetailId);
     unlockedPayloadCache.delete(currentDetailId);
@@ -1191,6 +1299,7 @@ async function exportItemsEncrypted(rawItems, defaultFileName){
       note: includeNote ? (it.note || '') : '',
       security: it.security || 'standard',
       threshold: it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD,
+      primaryIdx: it.primaryIdx !== undefined ? it.primaryIdx : 0,
       embeddings: it.embeddings || [it.embedding],
       createdAt: it.createdAt,
       photos: photosB64,
@@ -1244,6 +1353,7 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
         note: it.note || '',
         security: it.security || 'standard',
         threshold: it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD,
+        primaryIdx: it.primaryIdx !== undefined ? it.primaryIdx : 0,
         embeddings: it.embeddings || [it.embedding],
         photos,
         files,
