@@ -167,7 +167,6 @@ label.field-label{
 }
 .warn-box .title{font-family:var(--mono);font-weight:600;margin-bottom:4px;}
 
-/* アングルサムネイル一覧 */
 .angle-strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:8px 0 12px;}
 .angle-thumb-wrap{
   position:relative;width:58px;height:58px;flex-shrink:0;background:var(--bg);
@@ -278,11 +277,10 @@ label.field-label{
     
     <div id="detailLockNotice" class="warn-box" style="display:none;">
       <div class="title">RESTRICTED & ENCRYPTED</div>
-      現物照合が行われていないため、データは暗号化されたまま保護されています。
+      現物照合が行われていないため、データは暗号化されたまま保護されています。変更を行うには現物をスキャンしてください。
     </div>
 
     <div class="panel">
-      <!-- メインファインダー（サムネイルタップで切り替え表示） -->
       <div id="detailFinder" class="finder-box" style="display:block;">
         <img id="detailPhoto">
       </div>
@@ -297,13 +295,14 @@ label.field-label{
         <div class="angle-strip" id="detailAngleStrip"></div>
       </div>
 
-      <h2 id="detailName" style="font-family:var(--serif);font-size:17px;font-weight:600;margin:12px 0 10px;"></h2>
+      <label class="field-label">IDENTIFIER</label>
+      <input type="text" id="detailNameInput">
       
       <label class="field-label">MEMORANDUM</label>
-      <textarea id="detailNote"></textarea>
+      <textarea id="detailNoteInput"></textarea>
       
       <label class="field-label">SECURITY RESTRICTION</label>
-      <select id="detailSecurity">
+      <select id="detailSecuritySelect">
         <option value="standard">STANDARD</option>
         <option value="file-lock">FILE LOCK</option>
         <option value="masked">MASKED</option>
@@ -311,11 +310,15 @@ label.field-label{
       </select>
 
       <label class="field-label">MATCHING TOLERANCE</label>
-      <select id="detailThreshold">
+      <select id="detailThresholdSelect">
         <option value="0.75">0.75 [STANDARD]</option>
         <option value="0.82">0.82 [STRICT]</option>
         <option value="0.70">0.70 [TOLERANT]</option>
       </select>
+
+      <!-- 確定・変更保存ボタン -->
+      <button class="btn block" id="detailSaveBtn" style="margin-top:8px;">COMMIT CHANGES</button>
+      <p class="status-mono" id="detailSaveStatus"></p>
     </div>
 
     <div class="panel" id="detailFilesCard">
@@ -351,7 +354,8 @@ const DUPLICATE_THRESHOLD = 0.82;
 let db, extractor, deviceMasterKey=null;
 let addBlob=null, addEmbeddingGroup=[], findBlob=null, currentDetailId=null;
 let duplicateCandidateId = null;
-let currentActivePhotoIdx = 0; // 詳細画面で現在プレビュー中の写真インデックス
+let currentActivePhotoIdx = 0;
+let loadedDetailItem = null; // 現在詳細画面で編集中・メモリ保持している平文オブジェクト
 
 const unlockedSessions = new Set();
 const unlockedPayloadCache = new Map();
@@ -439,7 +443,7 @@ function safeObjectUrl(source){
       return URL.createObjectURL(base64ToBlob(source.data, source.type));
     }
   } catch (err) {
-    console.error('safeObjectUrl failed:', err);
+    console.error('safeObjectUrl error:', err);
   }
   return '';
 }
@@ -519,7 +523,6 @@ async function embed(blob){
 
 async function extract4WayEmbeddings(baseBlob, progressCb){
   const embeddings = [];
-  
   if (progressCb) progressCb('0° (BASE)');
   const emb0 = await embed(baseBlob);
   embeddings.push(emb0);
@@ -532,7 +535,6 @@ async function extract4WayEmbeddings(baseBlob, progressCb){
     const emb = await embed(rotatedBlobs[i]);
     embeddings.push(emb);
   }
-
   return embeddings;
 }
 
@@ -558,12 +560,26 @@ function base64ToBlob(b64, type){
   return new Blob([arr], {type});
 }
 
+// 記録オブジェクトの安静時暗号化（DB保存前）
 async function secureItemForStorage(rawItem){
   const sec = rawItem.security || 'standard';
+  
+  // 完全平文保存（STANDARD）
   if(sec === 'standard'){
-    return rawItem;
+    return {
+      id: rawItem.id,
+      security: 'standard',
+      threshold: rawItem.threshold,
+      embeddings: rawItem.embeddings,
+      createdAt: rawItem.createdAt,
+      name: rawItem.name,
+      note: rawItem.note || '',
+      photos: rawItem.photos, // Blob配列
+      files: rawItem.files || []
+    };
   }
 
+  // 暗号化直列化
   const photosB64 = [];
   for(const p of rawItem.photos){
     photosB64.push({ type: p.type, data: await blobToBase64(p) });
@@ -577,12 +593,20 @@ async function secureItemForStorage(rawItem){
     const plainFilesBytes = new TextEncoder().encode(JSON.stringify(filesB64));
     const encryptedFiles = await encryptWithDeviceKey(deviceMasterKey, plainFilesBytes);
     return {
-      ...rawItem,
-      files: [],
+      id: rawItem.id,
+      security: 'file-lock',
+      threshold: rawItem.threshold,
+      embeddings: rawItem.embeddings,
+      createdAt: rawItem.createdAt,
+      name: rawItem.name,
+      note: rawItem.note || '',
+      photos: rawItem.photos,
+      files: [], // 平文領域からは消去
       encryptedFiles: encryptedFiles
     };
   }
 
+  // MASKED または HIDDEN: 外観・内容を完全暗号化
   const sensitivePayload = {
     name: rawItem.name,
     note: rawItem.note || '',
@@ -606,6 +630,7 @@ async function secureItemForStorage(rawItem){
   };
 }
 
+// 照合状況に応じたオンデマンド一時復号（RAM内のみ展開）
 async function resolveItemPayload(storedItem, isUnlocked){
   const sec = storedItem.security || 'standard';
   if(sec === 'standard') return storedItem;
@@ -877,14 +902,18 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   }
 };
 
-// 詳細表示
+// 詳細表示（一元化された安全な初期化）
 async function openDetail(id, focusPhotoIdx = 0){
   currentDetailId = id;
   currentActivePhotoIdx = focusPhotoIdx;
+  document.getElementById('detailSaveStatus').textContent = '';
+
   const storedItem = await idbGet(id);
   const isUnlocked = unlockedSessions.has(id);
   
-  const it = await resolveItemPayload(storedItem, isUnlocked);
+  // RAM上に完全な平文データとして保持
+  loadedDetailItem = await resolveItemPayload(storedItem, isUnlocked);
+  const it = loadedDetailItem;
   const sec = it.security || 'standard';
 
   if(!it.photos && it.photo) it.photos = [it.photo];
@@ -893,30 +922,36 @@ async function openDetail(id, focusPhotoIdx = 0){
   const lockNotice = document.getElementById('detailLockNotice');
   const finderEl = document.getElementById('detailFinder');
   const photoEl = document.getElementById('detailPhoto');
-  const nameEl = document.getElementById('detailName');
-  const noteEl = document.getElementById('detailNote');
-  const secEl = document.getElementById('detailSecurity');
-  const thEl = document.getElementById('detailThreshold');
+  const nameInput = document.getElementById('detailNameInput');
+  const noteInput = document.getElementById('detailNoteInput');
+  const secSelect = document.getElementById('detailSecuritySelect');
+  const thSelect = document.getElementById('detailThresholdSelect');
+  const saveBtn = document.getElementById('detailSaveBtn');
   const anglesCard = document.getElementById('detailAnglesCard');
   const filesCard = document.getElementById('detailFilesCard');
 
-  secEl.value = sec;
-  thEl.value = String(it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD);
+  // 閾値のフォーマット正規化（"0.7" -> "0.70"）
+  const currentTh = (it.threshold !== undefined ? parseFloat(it.threshold) : DEFAULT_THRESHOLD).toFixed(2);
+  secSelect.value = sec;
+  thSelect.value = currentTh;
 
   if((sec === 'masked' || sec === 'hidden') && !isUnlocked){
+    // 未照合時は完全ロック
     lockNotice.style.display = 'block';
     finderEl.style.display = 'none';
     anglesCard.style.display = 'none';
-    nameEl.textContent = 'RESTRICTED & ENCRYPTED';
-    noteEl.value = '';
-    noteEl.disabled = true;
-    secEl.disabled = true;
-    thEl.disabled = true;
+    nameInput.value = '[RESTRICTED]';
+    nameInput.disabled = true;
+    noteInput.value = '';
+    noteInput.disabled = true;
+    secSelect.disabled = true;
+    thSelect.disabled = true;
+    saveBtn.disabled = true;
     filesCard.style.display = 'none';
   } else {
+    // 編集可能状態
     lockNotice.style.display = (sec !== 'standard' && !isUnlocked) ? 'block' : 'none';
     
-    // 現在選択されているキー画像をメインプレビューに表示
     const activePhoto = it.photos[currentActivePhotoIdx] || it.photos[0];
     photoEl.src = safeObjectUrl(activePhoto);
     finderEl.style.display = 'block';
@@ -924,11 +959,13 @@ async function openDetail(id, focusPhotoIdx = 0){
     
     renderDetailAngles(it);
 
-    nameEl.textContent = it.name;
-    noteEl.value = it.note || '';
-    noteEl.disabled = false;
-    secEl.disabled = false;
-    thEl.disabled = false;
+    nameInput.value = it.name || '';
+    nameInput.disabled = false;
+    noteInput.value = it.note || '';
+    noteInput.disabled = false;
+    secSelect.disabled = false;
+    thSelect.disabled = false;
+    saveBtn.disabled = false;
 
     if(sec === 'file-lock' && !isUnlocked){
       filesCard.style.display = 'none';
@@ -945,26 +982,47 @@ async function openDetail(id, focusPhotoIdx = 0){
 
 document.getElementById('detailBack').onclick = ()=>showView('list');
 
-document.getElementById('detailNote').onchange = async (e)=>{
-  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
-  it.note = e.target.value;
-  unlockedPayloadCache.set(it.id, it);
-  await idbPut(await secureItemForStorage(it));
-};
-document.getElementById('detailSecurity').onchange = async (e)=>{
-  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
-  it.security = e.target.value;
-  unlockedPayloadCache.set(it.id, it);
-  await idbPut(await secureItemForStorage(it));
-};
-document.getElementById('detailThreshold').onchange = async (e)=>{
-  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
-  it.threshold = parseFloat(e.target.value);
-  unlockedPayloadCache.set(it.id, it);
-  await idbPut(await secureItemForStorage(it));
+// 変更の確定コミット処理（ボタン押下による一括安全保存）
+document.getElementById('detailSaveBtn').onclick = async ()=>{
+  if(!loadedDetailItem) return;
+  const saveBtn = document.getElementById('detailSaveBtn');
+  const statusEl = document.getElementById('detailSaveStatus');
+
+  saveBtn.disabled = true;
+  statusEl.textContent = 'COMMITTING CHANGES...';
+
+  try {
+    const newName = document.getElementById('detailNameInput').value.trim() || 'SPECIMEN_' + Date.now();
+    const newNote = document.getElementById('detailNoteInput').value.trim();
+    const newSecurity = document.getElementById('detailSecuritySelect').value;
+    const newThreshold = parseFloat(document.getElementById('detailThresholdSelect').value) || DEFAULT_THRESHOLD;
+
+    // メモリ上の完全データを更新
+    loadedDetailItem.name = newName;
+    loadedDetailItem.note = newNote;
+    loadedDetailItem.security = newSecurity;
+    loadedDetailItem.threshold = newThreshold;
+
+    // 新しい保護レベルに応じて安全に暗号化（または平文化）してIndexedDBへ格納
+    const securedItem = await secureItemForStorage(loadedDetailItem);
+    await idbPut(securedItem);
+
+    // RAMキャッシュを更新
+    unlockedPayloadCache.set(loadedDetailItem.id, loadedDetailItem);
+
+    statusEl.textContent = 'CHANGES COMMITTED SUCCESSFULLY.';
+    setTimeout(()=>{ statusEl.textContent = ''; }, 2000);
+
+    // 画面状態をリフレッシュ
+    openDetail(loadedDetailItem.id, currentActivePhotoIdx);
+  } catch(err) {
+    console.error('Commit failed:', err);
+    statusEl.textContent = 'ERROR COMMITTING CHANGES.';
+  } finally {
+    saveBtn.disabled = false;
+  }
 };
 
-// サムネイル一覧の描画（タップでメインプレビュー切り替え対応）
 function renderDetailAngles(it){
   const strip = document.getElementById('detailAngleStrip');
   strip.innerHTML = '';
@@ -979,7 +1037,6 @@ function renderDetailAngles(it){
     img.src = safeObjectUrl(blobSource);
     wrap.appendChild(img);
 
-    // サムネイルタップでメインファインダーの画像を切り替え
     wrap.onclick = (e)=>{
       if (e.target.classList.contains('angle-del-btn')) return;
       currentActivePhotoIdx = idx;
@@ -999,7 +1056,7 @@ function renderDetailAngles(it){
         it.embeddings.splice(idx * 4, 4);
         unlockedPayloadCache.set(it.id, it);
         await idbPut(await secureItemForStorage(it));
-        openDetail(it.id, 0); // 削除後は先頭プレビューに戻す
+        openDetail(it.id, 0);
       };
       wrap.appendChild(delBtn);
     }
@@ -1007,7 +1064,6 @@ function renderDetailAngles(it){
   });
 }
 
-// 別キー（アングル）追加処理
 document.getElementById('detailAddAngleBtn').onclick = ()=>document.getElementById('detailAddAngleInput').click();
 document.getElementById('detailAddAngleInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
@@ -1019,7 +1075,7 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
   statusEl.style.display = 'block';
 
   try {
-    const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+    const it = loadedDetailItem;
     if(!it.photos) it.photos = [it.photo];
     if(!it.embeddings) it.embeddings = [it.embedding];
 
@@ -1035,8 +1091,6 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
     
     unlockedPayloadCache.set(it.id, it);
     await idbPut(await secureItemForStorage(it));
-    
-    // 追加した最新キーを選択・大きくプレビュー表示
     openDetail(it.id, it.photos.length - 1);
   } catch(err) {
     console.error('Add key failed:', err);
@@ -1066,7 +1120,7 @@ function renderDetailFiles(files){
     const openBtn = document.createElement('a'); openBtn.textContent='[GET]'; openBtn.href=URL.createObjectURL(f.blob); openBtn.download=f.name; openBtn.style.marginRight='10px'; openBtn.style.fontFamily='var(--mono)'; openBtn.style.color='var(--ink)';
     const delBtn = document.createElement('button'); delBtn.textContent='DEL'; delBtn.className='btn secondary'; delBtn.style.padding='2px 6px'; delBtn.style.fontSize='10px';
     delBtn.onclick = async ()=>{
-      const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+      const it = loadedDetailItem;
       it.files.splice(i,1);
       unlockedPayloadCache.set(it.id, it);
       await idbPut(await secureItemForStorage(it));
@@ -1078,7 +1132,7 @@ function renderDetailFiles(files){
 }
 document.getElementById('detailAddFile').onclick = ()=>document.getElementById('detailFileInput').click();
 document.getElementById('detailFileInput').onchange = async (e)=>{
-  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+  const it = loadedDetailItem;
   it.files = it.files||[];
   for(const f of e.target.files){ it.files.push({name:f.name, blob:f}); }
   unlockedPayloadCache.set(it.id, it);
@@ -1155,7 +1209,7 @@ async function exportItemsEncrypted(rawItems, defaultFileName){
 
 document.getElementById('detailExportBtn').onclick = async ()=>{
   const it = await idbGet(currentDetailId);
-  const safeName = it.name.replace(/[/\\?%*:|"<>]/g, '_');
+  const safeName = (loadedDetailItem?.name || it.name).replace(/[/\\?%*:|"<>]/g, '_');
   await exportItemsEncrypted([it], `specimen-${safeName}-${Date.now()}.encbak`);
 };
 
