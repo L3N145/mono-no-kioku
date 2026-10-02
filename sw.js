@@ -1,4 +1,6 @@
-const CACHE_NAME = 'mono-no-kioku-shell-v2';
+const CACHE_NAME = 'mono-no-kioku-vault-v3';
+
+// アプリ起動に必要なコアファイル
 const SHELL_FILES = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (event) => {
@@ -19,20 +21,32 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+
+  // 1. 同一オリジン（アプリ本体のHTML/JS）
+  const isAppShell = url.origin === self.location.origin;
+  // 2. AI推論エンジンおよびWebAssemblyファイル（cdn.jsdelivr.net）
+  const isJsDelivr = url.origin === 'https://cdn.jsdelivr.net';
+
+  // HuggingFaceのモデル自体はTransformers.js内部の専用CacheStorageに保存されるため除外
+  if (!isAppShell && !isJsDelivr) return;
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request)
-        .then((res) => {
-          if (res && res.status === 200) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
+    caches.match(event.request).then((cachedResponse) => {
+      // 端末内にキャッシュがあれば最優先でそれを返す（機内モードでも即起動）
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+
+      // キャッシュにない場合はネットワークから取得し、次回のためにキャッシュへ保存
+      return fetch(event.request).then((networkResponse) => {
+        if (networkResponse && (networkResponse.status === 200 || networkResponse.type === 'opaque')) {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+        }
+        return networkResponse;
+      });
     })
   );
 });
