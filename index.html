@@ -3,251 +3,340 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#2b2a26">
+<meta name="theme-color" content="#121211">
 <link rel="manifest" href="manifest.json">
 <title>モノの記憶</title>
 <style>
 :root{
-  --bg:#f7f6f2; --panel:#ffffff; --ink:#242422; --sub:#706e68;
-  --line:#e2ded4; --accent:#3a3833; --accent-ink:#ffffff; --danger:#8c2e2e;
-  --warn:#8a6418; --warn-bg:#fdf9ed; --warn-border:#eddcb4;
-  --radius:6px;
-  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#f4f2ec;
+  --panel:#ebe8df;
+  --panel-active:#ffffff;
+  --ink:#1c1b18;
+  --sub:#76736a;
+  --line:#d6d1c4;
+  --line-strong:#1c1b18;
+  --accent:#1c1b18;
+  --accent-ink:#f4f2ec;
+  --danger:#8e2a2a;
+  --warn:#7a5813;
+  --warn-bg:#ece5d0;
+  --mono:ui-monospace, "SF Mono", "Roboto Mono", "Courier New", monospace;
+  --serif:"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#181816; --panel:#21211e; --ink:#e8e6df; --sub:#8e8b82;
-    --line:#33322d; --accent:#e8e6df; --accent-ink:#181816; --danger:#b54545;
-    --warn:#d4aa55; --warn-bg:#262218; --warn-border:#423924;
+    --bg:#141413;
+    --panel:#1c1c1a;
+    --panel-active:#242422;
+    --ink:#e4e1d7;
+    --sub:#828076;
+    --line:#2c2c28;
+    --line-strong:#e4e1d7;
+    --accent:#e4e1d7;
+    --accent-ink:#141413;
+    --danger:#c24b4b;
+    --warn:#c9993b;
+    --warn-bg:#262114;
   }
 }
-*{box-sizing:border-box;}
+*{box-sizing:border-box;margin:0;padding:0;}
 body{
-  margin:0;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans","Yu Gothic",sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   background:var(--bg);
   color:var(--ink);
   min-height:100%;
+  -webkit-font-smoothing:antialiased;
 }
+
+/* ヘッダー：銘板（ネームプレート）のような佇まい */
 header{
-  position:sticky;top:0;z-index:5;background:var(--bg);
-  padding:calc(16px + env(safe-area-inset-top,0px)) 16px 12px;
-  border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:10;background:var(--bg);
+  padding:calc(18px + env(safe-area-inset-top,0px)) 20px 14px;
+  border-bottom:2px solid var(--line-strong);
+  display:flex;justify-content:space-between;align-items:flex-end;
 }
-header h1{font-size:17px;font-weight:600;margin:0;letter-spacing:0.02em;}
-header p{margin:4px 0 0;color:var(--sub);font-size:12px;word-break:break-all;}
-main{padding:16px;max-width:560px;margin:0 auto 90px;}
+header .title-area h1{
+  font-family:var(--serif);font-size:18px;font-weight:600;letter-spacing:0.08em;
+}
+header .title-area p{
+  font-family:var(--mono);font-size:10px;color:var(--sub);margin-top:4px;letter-spacing:0.02em;
+}
+header .status-tag{
+  font-family:var(--mono);font-size:10px;padding:2px 6px;
+  border:1px solid var(--line);color:var(--sub);text-transform:uppercase;
+}
+
+main{padding:20px;max-width:540px;margin:0 auto 90px;}
+
+/* タブ：インデックス目録のような区切り */
 nav.tabs{
   position:fixed;left:0;right:0;bottom:0;display:flex;
-  background:var(--panel);border-top:1px solid var(--line);
-  padding-bottom:env(safe-area-inset-bottom,0px);z-index:5;
+  background:var(--bg);border-top:2px solid var(--line-strong);
+  padding-bottom:env(safe-area-inset-bottom,0px);z-index:10;
 }
 nav.tabs button{
-  flex:1;border:none;background:none;padding:14px 4px;
-  color:var(--sub);font-size:12px;letter-spacing:0.04em;cursor:pointer;
+  flex:1;border:none;background:none;padding:16px 4px;
+  color:var(--sub);font-family:var(--mono);font-size:11px;letter-spacing:0.06em;
+  cursor:pointer;border-right:1px solid var(--line);
 }
-nav.tabs button.active{color:var(--ink);font-weight:600;}
+nav.tabs button:last-child{border-right:none;}
+nav.tabs button.active{
+  color:var(--accent-ink);background:var(--accent);font-weight:600;
+}
+
 .view{display:none;} .view.active{display:block;}
-.card{
+
+/* ボックス・カード：紙片や金属プレートの質感 */
+.panel{
   background:var(--panel);border:1px solid var(--line);
-  border-radius:var(--radius);padding:14px;margin-bottom:12px;
+  padding:16px;margin-bottom:16px;position:relative;
 }
+
+/* ボタン：シャープで工業的な押し心地 */
 .btn{
-  display:inline-block;border:none;border-radius:var(--radius);
-  padding:10px 16px;font-size:13px;cursor:pointer;
-  background:var(--accent);color:var(--accent-ink);letter-spacing:0.02em;
+  display:inline-block;border:1px solid var(--accent);border-radius:0;
+  padding:11px 16px;font-family:var(--mono);font-size:12px;letter-spacing:0.04em;
+  cursor:pointer;background:var(--accent);color:var(--accent-ink);text-align:center;
 }
 .btn.secondary{background:transparent;color:var(--ink);border:1px solid var(--line);}
-.btn.danger{background:var(--danger);color:#ffffff;}
-.btn.block{display:block;width:100%;text-align:center;}
-.btn:disabled{opacity:0.4;cursor:default;}
+.btn.secondary:hover{border-color:var(--line-strong);}
+.btn.danger{background:transparent;color:var(--danger);border-color:var(--danger);}
+.btn.block{display:block;width:100%;}
+.btn:disabled{opacity:0.3;cursor:not-allowed;}
+
 input[type=text], select, textarea{
-  width:100%;padding:10px;border:1px solid var(--line);border-radius:var(--radius);
-  background:var(--panel);color:var(--ink);font-size:13px;margin:6px 0 12px;
-  box-sizing:border-box;font-family:inherit;
+  width:100%;padding:10px;border:1px solid var(--line);border-radius:0;
+  background:var(--panel-active);color:var(--ink);font-size:13px;margin:6px 0 14px;
+  box-sizing:border-box;font-family:inherit;outline:none;
+}
+input[type=text]:focus, textarea:focus, select:focus{
+  border-color:var(--line-strong);
 }
 textarea{min-height:80px;resize:vertical;}
-label.field-label{font-size:12px;color:var(--sub);display:block;margin-top:4px;}
-.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
-.item-thumb{
-  aspect-ratio:1;width:100%;object-fit:cover;
-  border-radius:var(--radius);background:var(--line);
+label.field-label{
+  font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--sub);
+  letter-spacing:0.05em;display:block;margin-top:4px;
 }
-.item-thumb.masked{
+
+/* 一覧グリッド：標本カードのようなデザイン */
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
+.specimen-card{
+  background:var(--panel);border:1px solid var(--line);
+  padding:8px;cursor:pointer;transition:border-color 0.15s;
+}
+.specimen-card:hover{border-color:var(--line-strong);}
+.specimen-thumb-wrap{
+  aspect-ratio:1;width:100%;background:var(--bg);position:relative;overflow:hidden;
+  border-bottom:1px solid var(--line);
+}
+.specimen-thumb{width:100%;height:100%;object-fit:cover;}
+.specimen-thumb.masked{
   display:flex;align-items:center;justify-content:center;
-  color:var(--sub);font-size:11px;border:1px dashed var(--line);background:transparent;
+  font-family:var(--mono);font-size:10px;color:var(--sub);letter-spacing:0.08em;
 }
-.item-name{font-size:13px;margin-top:6px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.preview{
-  width:100%;border-radius:var(--radius);margin-bottom:12px;
-  background:var(--line);max-height:280px;object-fit:cover;
+.specimen-meta{padding:8px 4px 4px;}
+.specimen-idx{font-family:var(--mono);font-size:9px;color:var(--sub);letter-spacing:0.04em;}
+.specimen-name{font-size:12px;font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* 光学ファインダー風のプレビュー枠 */
+.finder-box{
+  position:relative;background:#000000;margin-bottom:16px;
+  border:1px solid var(--line);display:none;aspect-ratio:4/3;overflow:hidden;
 }
-.empty{color:var(--sub);font-size:13px;text-align:center;padding:48px 10px;line-height:1.6;}
-.status{color:var(--sub);font-size:12px;margin:10px 0;}
+.finder-box img{width:100%;height:100%;object-fit:contain;}
+/* ファインダーの四隅レティクル（十字・カギカッコ線） */
+.finder-box::before, .finder-box::after{
+  content:"";position:absolute;width:16px;height:16px;pointer-events:none;
+}
+.finder-box::before{
+  top:12px;left:12px;border-top:2px solid rgba(255,255,255,0.7);border-left:2px solid rgba(255,255,255,0.7);
+}
+.finder-box::after{
+  bottom:12px;right:12px;border-bottom:2px solid rgba(255,255,255,0.7);border-right:2px solid rgba(255,255,255,0.7);
+}
+.finder-crosshair{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:16px;height:16px;pointer-events:none;
+}
+.finder-crosshair::before{content:"";position:absolute;top:7px;left:0;right:0;height:1px;background:rgba(255,255,255,0.4);}
+.finder-crosshair::after{content:"";position:absolute;left:7px;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.4);}
+
+.empty{
+  font-family:var(--serif);color:var(--sub);font-size:13px;text-align:center;
+  padding:60px 10px;line-height:1.8;letter-spacing:0.04em;
+}
+.status-mono{font-family:var(--mono);font-size:11px;color:var(--sub);margin:10px 0;}
+.warn-box{
+  background:var(--warn-bg);border:1px solid var(--warn);color:var(--warn);
+  padding:12px;font-size:11px;line-height:1.5;margin-bottom:14px;
+}
+.warn-box .title{font-family:var(--mono);font-weight:600;margin-bottom:4px;}
+
+.angle-strip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:8px 0 12px;}
+.angle-thumb-wrap{position:relative;width:56px;height:56px;flex-shrink:0;}
+.angle-thumb{width:100%;height:100%;object-fit:cover;border:1px solid var(--line);}
+.angle-del-btn{
+  position:absolute;top:0;right:0;width:16px;height:16px;border-radius:0;
+  background:var(--danger);color:#fff;border:none;font-size:9px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
 .file-row{
   display:flex;justify-content:space-between;align-items:center;
-  padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;
+  padding:10px 0;border-bottom:1px solid var(--line);font-size:12px;
 }
 .file-row:last-child{border-bottom:none;}
-.match-score{font-size:12px;color:var(--sub);margin-left:4px;}
-.notice-box{
-  background:var(--bg);border:1px solid var(--line);border-radius:var(--radius);
-  padding:12px;font-size:12px;color:var(--sub);line-height:1.5;margin-bottom:12px;
-}
-.warn-box{
-  background:var(--warn-bg);border:1px solid var(--warn-border);color:var(--warn);
-  border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;margin-bottom:12px;
-}
-.angle-strip{
-  display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin:8px 0 12px;
-}
-.angle-thumb-wrap{
-  position:relative;width:64px;height:64px;flex-shrink:0;
-}
-.angle-thumb{
-  width:100%;height:100%;object-fit:cover;border-radius:var(--radius);border:1px solid var(--line);
-}
-.angle-del-btn{
-  position:absolute;top:-4px;right:-4px;width:18px;height:18px;border-radius:50%;
-  background:var(--danger);color:#fff;border:none;font-size:10px;line-height:1;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;
-}
 </style>
 </head>
 <body>
+
 <header>
-  <h1>モノの記憶</h1>
-  <p id="headerStatus">初期化中...</p>
+  <div class="title-area">
+    <h1>モノの記憶</h1>
+    <p id="headerStatus">INITIALIZING CORE ENGINE...</p>
+  </div>
+  <div class="status-tag">LOCAL VAULT</div>
 </header>
+
 <main>
   <!-- 一覧画面 -->
   <section id="view-list" class="view active">
-    <div style="display:flex;gap:8px;margin-bottom:12px;">
-      <button class="btn secondary" id="backupAllBtn" style="flex:1;">バックアップ保存</button>
-      <button class="btn secondary" id="restoreBtn" style="flex:1;">復元 / 読込</button>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <button class="btn secondary" id="backupAllBtn" style="flex:1;">BACKUP ALL</button>
+      <button class="btn secondary" id="restoreBtn" style="flex:1;">RESTORE</button>
     </div>
     <input type="file" id="restoreFileInput" accept=".encbak" style="display:none;">
-    <div id="listEmpty" class="empty">登録されている記録はありません。<br>「登録」から対象の現物を撮影してください。</div>
+    <div id="listEmpty" class="empty">登録されている物体はありません。<br>「REGIST」から現物を記録してください。</div>
     <div id="listGrid" class="grid"></div>
   </section>
 
   <!-- 登録画面 -->
   <section id="view-add" class="view">
-    <div class="card">
-      <img id="addPreview" class="preview" style="display:none;">
+    <div class="panel">
+      <!-- 光学ファインダー風プレビュー -->
+      <div id="addFinder" class="finder-box">
+        <img id="addPreview">
+        <div class="finder-crosshair"></div>
+      </div>
+
       <input type="file" accept="image/*" capture="environment" id="addPhotoInput" style="display:none;">
-      <button class="btn block" id="addPhotoBtn">写真を撮影</button>
+      <button class="btn block" id="addPhotoBtn">[ CAPTURE SPECIMEN ]</button>
       
-      <div id="addDuplicateBox" class="warn-box" style="display:none;margin-top:12px;">
-        <div id="addDuplicateMsg" style="font-weight:600;margin-bottom:6px;"></div>
-        <div style="color:var(--ink);font-size:11px;margin-bottom:10px;">
-          同一の物体を二重登録すると、照合時に意図しないデータが呼び出される可能性があります。
-        </div>
+      <div id="addDuplicateBox" class="warn-box" style="display:none;margin-top:14px;">
+        <div class="title" id="addDuplicateMsg">DUPLICATE DETECTED</div>
+        <div style="margin-bottom:10px;">既存のデータと特徴ベクトルが酷似しています。二重登録は照合不整合の原因になります。</div>
         <div style="display:flex;gap:8px;">
-          <button class="btn secondary" id="addOpenExistingBtn" style="flex:1;padding:6px;font-size:11px;">既存の記録を開く</button>
-          <button class="btn secondary" id="addIgnoreDuplicateBtn" style="flex:1;padding:6px;font-size:11px;">重複を許容する</button>
+          <button class="btn secondary" id="addOpenExistingBtn" style="flex:1;padding:6px;font-size:10px;">既存を開く</button>
+          <button class="btn secondary" id="addIgnoreDuplicateBtn" style="flex:1;padding:6px;font-size:10px;">重複を無視</button>
         </div>
       </div>
 
-      <label class="field-label" style="margin-top:12px;">識別名</label>
-      <input type="text" id="addName" placeholder="記録の名称">
+      <label class="field-label" style="margin-top:14px;">IDENTIFIER</label>
+      <input type="text" id="addName" placeholder="記録名・識別子">
       
-      <label class="field-label">メモ</label>
-      <textarea id="addNote" placeholder="任意のテキスト"></textarea>
+      <label class="field-label">MEMORANDUM</label>
+      <textarea id="addNote" placeholder="任意の記録・覚書"></textarea>
       
-      <label class="field-label">保護設定</label>
+      <label class="field-label">SECURITY RESTRICTION</label>
       <select id="addSecurity">
-        <option value="standard">標準（常にすべて表示）</option>
-        <option value="file-lock">ファイル制限（現物照合までファイルを不可視化）</option>
-        <option value="masked">マスク（現物照合まで外観・内容を伏せる）</option>
-        <option value="hidden">非表示（一覧から除外、現物照合時のみ展開）</option>
+        <option value="standard">STANDARD（通常表示）</option>
+        <option value="file-lock">FILE LOCK（現物照合までファイルを不可視化）</option>
+        <option value="masked">MASKED（現物照合まで外観・内容を完全秘匿）</option>
+        <option value="hidden">HIDDEN（一覧から除外・現物照合時のみ展開）</option>
       </select>
 
-      <label class="field-label">照合感度（閾値）</label>
+      <label class="field-label">MATCHING TOLERANCE</label>
       <select id="addThreshold">
-        <option value="0.75" selected>標準（75% - 通常の物体）</option>
-        <option value="0.82">厳格（82% - 無地・形状が単純な物体）</option>
-        <option value="0.70">寛容（70% - 角度や光で変化しやすい立体物）</option>
+        <option value="0.75" selected>0.75 [STANDARD] - 標準</option>
+        <option value="0.82">0.82 [STRICT] - 厳格（無地・単色物）</option>
+        <option value="0.70">0.70 [TOLERANT] - 寛容（複雑な立体物）</option>
       </select>
       
-      <button class="btn block" id="addSaveBtn" disabled>保存</button>
-      <p class="status" id="addStatus"></p>
+      <button class="btn block" id="addSaveBtn" style="margin-top:10px;" disabled>COMMIT TO STORAGE</button>
+      <p class="status-mono" id="addStatus"></p>
     </div>
   </section>
 
   <!-- 照合画面 -->
   <section id="view-find" class="view">
-    <div class="card">
-      <img id="findPreview" class="preview" style="display:none;">
+    <div class="panel">
+      <div id="findFinder" class="finder-box">
+        <img id="findPreview">
+        <div class="finder-crosshair"></div>
+      </div>
+
       <input type="file" accept="image/*" capture="environment" id="findPhotoInput" style="display:none;">
-      <button class="btn block" id="findPhotoBtn">現物を撮影して照合</button>
-      <p class="status" id="findStatus"></p>
+      <button class="btn block" id="findPhotoBtn">[ SCAN OBJECT ]</button>
+      <p class="status-mono" id="findStatus"></p>
     </div>
     <div id="findResult"></div>
   </section>
 
   <!-- 詳細・編集画面 -->
   <section id="view-detail" class="view">
-    <button class="btn secondary" id="detailBack" style="margin-bottom:10px;">← 一覧へ戻る</button>
+    <button class="btn secondary" id="detailBack" style="margin-bottom:14px;padding:6px 12px;font-size:11px;">← RETURN TO INDEX</button>
     
-    <div id="detailLockNotice" class="notice-box" style="display:none;">
-      保護されています。ファイルや詳細情報の閲覧・編集には、現物の照合が必要です。
+    <div id="detailLockNotice" class="warn-box" style="display:none;">
+      <div class="title">RESTRICTED</div>
+      現物照合が行われていないため、一部のデータが保護されています。
     </div>
 
-    <div class="card">
-      <img id="detailPhoto" class="preview">
+    <div class="panel">
+      <div id="detailFinder" class="finder-box" style="display:block;">
+        <img id="detailPhoto">
+      </div>
       
-      <!-- 別アングル登録管理 -->
       <div id="detailAnglesCard">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <label class="field-label" style="margin:0;">登録アングル</label>
-          <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 10px;font-size:11px;">＋ アングル追加</button>
+          <label class="field-label" style="margin:0;">REGISTERED ANGLES</label>
+          <button class="btn secondary" id="detailAddAngleBtn" style="padding:4px 8px;font-size:10px;">+ ADD ANGLE</button>
         </div>
         <input type="file" accept="image/*" capture="environment" id="detailAddAngleInput" style="display:none;">
         <div class="angle-strip" id="detailAngleStrip"></div>
       </div>
 
-      <h2 id="detailName" style="font-size:16px;font-weight:600;margin:0 0 8px;"></h2>
+      <h2 id="detailName" style="font-family:var(--serif);font-size:17px;font-weight:600;margin:12px 0 10px;"></h2>
       
-      <label class="field-label">メモ</label>
-      <textarea id="detailNote" placeholder="メモ"></textarea>
+      <label class="field-label">MEMORANDUM</label>
+      <textarea id="detailNote"></textarea>
       
-      <label class="field-label">保護設定</label>
+      <label class="field-label">SECURITY RESTRICTION</label>
       <select id="detailSecurity">
-        <option value="standard">標準</option>
-        <option value="file-lock">ファイル制限</option>
-        <option value="masked">マスク</option>
-        <option value="hidden">非表示</option>
+        <option value="standard">STANDARD</option>
+        <option value="file-lock">FILE LOCK</option>
+        <option value="masked">MASKED</option>
+        <option value="hidden">HIDDEN</option>
       </select>
 
-      <label class="field-label">照合感度（閾値）</label>
+      <label class="field-label">MATCHING TOLERANCE</label>
       <select id="detailThreshold">
-        <option value="0.75">標準（75%）</option>
-        <option value="0.82">厳格（82%）</option>
-        <option value="0.70">寛容（70%）</option>
+        <option value="0.75">0.75 [STANDARD]</option>
+        <option value="0.82">0.82 [STRICT]</option>
+        <option value="0.70">0.70 [TOLERANT]</option>
       </select>
     </div>
 
-    <div class="card" id="detailFilesCard">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <span style="font-size:13px;font-weight:600;">紐づけファイル</span>
-        <button class="btn secondary" id="detailAddFile" style="padding:6px 12px;font-size:12px;">追加</button>
+    <div class="panel" id="detailFilesCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span style="font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:0.04em;">ATTACHED FILES</span>
+        <button class="btn secondary" id="detailAddFile" style="padding:4px 8px;font-size:10px;">+ ATTACH</button>
       </div>
       <input type="file" id="detailFileInput" multiple style="display:none;">
-      <div id="detailFiles" style="margin-top:8px;"></div>
+      <div id="detailFiles"></div>
     </div>
 
-    <div class="card" style="display:flex;flex-direction:column;gap:8px;">
-      <button class="btn secondary" id="detailExportBtn">この記録を暗号化エクスポート</button>
-      <button class="btn danger" id="detailDeleteBtn">記録を削除</button>
+    <div class="panel" style="display:flex;flex-direction:column;gap:8px;">
+      <button class="btn secondary block" id="detailExportBtn">EXPORT SPECIMEN (ENCRYPTED)</button>
+      <button class="btn danger block" id="detailDeleteBtn">PURGE SPECIMEN</button>
     </div>
   </section>
 </main>
 
 <nav class="tabs">
-  <button data-view="list" class="active">一覧</button>
-  <button data-view="add">登録</button>
-  <button data-view="find">照合</button>
+  <button data-view="list" class="active">INDEX</button>
+  <button data-view="add">REGIST</button>
+  <button data-view="find">SCAN</button>
 </nav>
 
 <script type="module">
@@ -341,12 +430,11 @@ function cosine(a, b){
   return Math.max(-1, Math.min(1, dot));
 }
 
-// 照合画面の状態初期化（前回の撮影・結果の残りを完全にクリア）
 function clearFindView(){
   findBlob = null;
-  const img = document.getElementById('findPreview');
-  img.src = '';
-  img.style.display = 'none';
+  const finder = document.getElementById('findFinder');
+  finder.style.display = 'none';
+  document.getElementById('findPreview').src = '';
   document.getElementById('findPhotoInput').value = '';
   document.getElementById('findResult').innerHTML = '';
   document.getElementById('findStatus').textContent = '';
@@ -370,20 +458,36 @@ async function renderList(){
   document.getElementById('listEmpty').style.display = items.length ? 'none' : 'block';
   grid.innerHTML='';
   
-  items.sort((a,b)=>b.createdAt-a.createdAt).forEach(it=>{
-    const div = document.createElement('div');
+  items.sort((a,b)=>b.createdAt-a.createdAt).forEach((it, idx)=>{
+    const card = document.createElement('div');
+    card.className = 'specimen-card';
     const isMasked = (it.security === 'masked');
 
+    const padIdx = String(items.length - idx).padStart(3, '0');
+
     if(isMasked){
-      div.innerHTML = `<div class="item-thumb masked">保護中</div><div class="item-name" style="color:var(--sub);">保護された記録</div>`;
+      card.innerHTML = `
+        <div class="specimen-thumb-wrap">
+          <div class="specimen-thumb masked">[ RESTRICTED ]</div>
+        </div>
+        <div class="specimen-meta">
+          <div class="specimen-idx">#${padIdx} // MASKED</div>
+          <div class="specimen-name" style="color:var(--sub);">保護された標本</div>
+        </div>`;
     } else {
       const primaryPhoto = (it.photos && it.photos.length) ? it.photos[0] : it.photo;
       const imgUrl = URL.createObjectURL(primaryPhoto);
-      div.innerHTML = `<img class="item-thumb" src="${imgUrl}"><div class="item-name">${escapeHtml(it.name)}</div>`;
+      card.innerHTML = `
+        <div class="specimen-thumb-wrap">
+          <img class="specimen-thumb" src="${imgUrl}">
+        </div>
+        <div class="specimen-meta">
+          <div class="specimen-idx">#${padIdx} // ${it.security.toUpperCase()}</div>
+          <div class="specimen-name">${escapeHtml(it.name)}</div>
+        </div>`;
     }
-    div.style.cursor='pointer';
-    div.onclick=()=>openDetail(it.id);
-    grid.appendChild(div);
+    card.onclick=()=>openDetail(it.id);
+    grid.appendChild(card);
   });
 }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
@@ -397,14 +501,15 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
   duplicateCandidateId = null;
   document.getElementById('addSaveBtn').disabled = true;
 
-  document.getElementById('addStatus').textContent = '最適化中...';
+  document.getElementById('addStatus').textContent = 'OPTIMIZING RESAMPLE...';
   addBlob = await downscaleImage(file);
   
+  const finder = document.getElementById('addFinder');
   const img = document.getElementById('addPreview');
   img.src = URL.createObjectURL(addBlob);
-  img.style.display = 'block';
+  finder.style.display = 'block';
   
-  document.getElementById('addStatus').textContent = '特徴抽出・重複確認中...';
+  document.getElementById('addStatus').textContent = 'EXTRACTING VECTOR MATRIX...';
   addEmbedding = await embed(addBlob);
 
   const items = await idbAll();
@@ -417,7 +522,7 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
     }
   }
 
-  document.getElementById('addStatus').textContent = '完了';
+  document.getElementById('addStatus').textContent = 'VECTOR CAPTURED.';
 
   if(candidate && maxScore >= DUPLICATE_THRESHOLD){
     duplicateCandidateId = candidate.id;
@@ -425,7 +530,7 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
     const targetLabel = isSecret ? '保護された記録' : `「${candidate.name}」`;
     
     document.getElementById('addDuplicateMsg').textContent = 
-      `既存の${targetLabel}と類似しています（一致率 ${(maxScore*100).toFixed(0)}%）`;
+      `DUPLICATE DETECTED (${(maxScore*100).toFixed(0)}% MATCH)`;
     document.getElementById('addDuplicateBox').style.display = 'block';
     document.getElementById('addSaveBtn').disabled = true;
   } else {
@@ -444,7 +549,7 @@ document.getElementById('addIgnoreDuplicateBtn').onclick = ()=>{
 };
 
 document.getElementById('addSaveBtn').onclick = async ()=>{
-  const name = document.getElementById('addName').value.trim() || '名称未設定';
+  const name = document.getElementById('addName').value.trim() || 'SPECIMEN_' + Date.now();
   const note = document.getElementById('addNote').value.trim();
   const security = document.getElementById('addSecurity').value;
   const threshold = parseFloat(document.getElementById('addThreshold').value) || DEFAULT_THRESHOLD;
@@ -462,7 +567,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   document.getElementById('addNote').value='';
   document.getElementById('addSecurity').value='standard';
   document.getElementById('addThreshold').value='0.75';
-  document.getElementById('addPreview').style.display='none';
+  document.getElementById('addFinder').style.display='none';
   document.getElementById('addDuplicateBox').style.display='none';
   document.getElementById('addSaveBtn').disabled=true;
   document.getElementById('addStatus').textContent='';
@@ -473,14 +578,15 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
 document.getElementById('findPhotoBtn').onclick = ()=>document.getElementById('findPhotoInput').click();
 document.getElementById('findPhotoInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
-  document.getElementById('findStatus').textContent='最適化中...';
+  document.getElementById('findStatus').textContent='OPTIMIZING...';
   findBlob = await downscaleImage(file);
   
+  const finder = document.getElementById('findFinder');
   const img = document.getElementById('findPreview');
   img.src = URL.createObjectURL(findBlob);
-  img.style.display='block';
+  finder.style.display='block';
   document.getElementById('findResult').innerHTML='';
-  document.getElementById('findStatus').textContent='照合中...';
+  document.getElementById('findStatus').textContent='CROSS-MATCHING MATRIX...';
   
   const emb = await embed(findBlob);
   const items = await idbAll();
@@ -491,7 +597,6 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
     const embs = it.embeddings || [it.embedding];
     const itemThreshold = it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD;
     
-    // 該当アイテムが持つ全アングル中、最高のスコアを算出
     let itemMaxScore = -1;
     for(const targetEmb of embs){
       const s = cosine(emb, targetEmb);
@@ -511,24 +616,29 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   if(best && passThreshold){
     unlockedSessions.add(best.id);
 
-    resultDiv.innerHTML = `<div class="card">照合成功<span class="match-score">（一致率 ${(bestScore*100).toFixed(0)}%）</span></div>`;
-    const btn = document.createElement('button');
-    btn.className='btn block'; 
-    btn.textContent = (best.security === 'masked' || best.security === 'hidden') ? '解除して開く' : `「${best.name}」を開く`;
-    btn.onclick=()=>openDetail(best.id);
-    resultDiv.appendChild(btn);
+    resultDiv.innerHTML = `
+      <div class="panel" style="border:1px solid var(--line-strong);">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--sub);">VERIFIED // MATCH ${(bestScore*100).toFixed(1)}%</div>
+        <div style="font-family:var(--serif);font-size:16px;font-weight:600;margin:6px 0 12px;">
+          ${(best.security === 'masked' || best.security === 'hidden') ? 'UNLOCKED SPECIMEN' : escapeHtml(best.name)}
+        </div>
+        <button class="btn block" id="openVerifiedBtn">OPEN SPECIMEN RECORD</button>
+      </div>`;
+    document.getElementById('openVerifiedBtn').onclick = ()=>openDetail(best.id);
   } else {
-    resultDiv.innerHTML = `<div class="card">一致する記録はありません。${best?`<span class="match-score">（最高一致率 ${(bestScore*100).toFixed(0)}%）</span>`:''}</div>`;
-    const btn = document.createElement('button');
-    btn.className='btn secondary block'; btn.textContent='この写真で新しく登録する';
-    btn.onclick=()=>{
+    resultDiv.innerHTML = `
+      <div class="panel">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--sub);">MATCH FAILED ${best ? `// MAX ${(bestScore*100).toFixed(1)}%` : ''}</div>
+        <div style="font-size:13px;margin:6px 0 12px;">登録された特徴ベクトルと一致しませんでした。</div>
+        <button class="btn secondary block" id="registerFromFailedBtn">+ REGISTER AS NEW SPECIMEN</button>
+      </div>`;
+    document.getElementById('registerFromFailedBtn').onclick = ()=>{
       addBlob = findBlob; addEmbedding = emb;
       document.getElementById('addPreview').src = img.src;
-      document.getElementById('addPreview').style.display = 'block';
+      document.getElementById('addFinder').style.display = 'block';
       document.getElementById('addSaveBtn').disabled = false;
       showView('add');
     };
-    resultDiv.appendChild(btn);
   }
 };
 
@@ -539,11 +649,11 @@ async function openDetail(id){
   const isUnlocked = unlockedSessions.has(id);
   const sec = it.security || 'standard';
 
-  // 互換性担保（単一photo/embeddingからの移行）
   if(!it.photos && it.photo) it.photos = [it.photo];
   if(!it.embeddings && it.embedding) it.embeddings = [it.embedding];
 
   const lockNotice = document.getElementById('detailLockNotice');
+  const finderEl = document.getElementById('detailFinder');
   const photoEl = document.getElementById('detailPhoto');
   const nameEl = document.getElementById('detailName');
   const noteEl = document.getElementById('detailNote');
@@ -557,9 +667,9 @@ async function openDetail(id){
 
   if(sec === 'masked' && !isUnlocked){
     lockNotice.style.display = 'block';
-    photoEl.style.display = 'none';
+    finderEl.style.display = 'none';
     anglesCard.style.display = 'none';
-    nameEl.textContent = '保護された記録';
+    nameEl.textContent = 'RESTRICTED SPECIMEN';
     noteEl.value = '';
     noteEl.disabled = true;
     secEl.disabled = true;
@@ -568,7 +678,7 @@ async function openDetail(id){
   } else {
     lockNotice.style.display = (sec !== 'standard' && !isUnlocked) ? 'block' : 'none';
     photoEl.src = URL.createObjectURL(it.photos[0]);
-    photoEl.style.display = 'block';
+    finderEl.style.display = 'block';
     anglesCard.style.display = 'block';
     renderDetailAngles(it);
 
@@ -603,7 +713,6 @@ document.getElementById('detailThreshold').onchange = async (e)=>{
   const it = await idbGet(currentDetailId); it.threshold = parseFloat(e.target.value); await idbPut(it);
 };
 
-// アングル一覧の描画と削除
 function renderDetailAngles(it){
   const strip = document.getElementById('detailAngleStrip');
   strip.innerHTML = '';
@@ -615,7 +724,6 @@ function renderDetailAngles(it){
     img.src = URL.createObjectURL(blob);
     wrap.appendChild(img);
 
-    // 2枚目以降のみ削除可能（最低1枚は維持）
     if(it.photos.length > 1){
       const delBtn = document.createElement('button');
       delBtn.className = 'angle-del-btn';
@@ -632,7 +740,6 @@ function renderDetailAngles(it){
   });
 }
 
-// 別アングルの追加撮影
 document.getElementById('detailAddAngleBtn').onclick = ()=>document.getElementById('detailAddAngleInput').click();
 document.getElementById('detailAddAngleInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
@@ -650,7 +757,7 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
 };
 
 document.getElementById('detailDeleteBtn').onclick = async ()=>{
-  if(confirm('この記録と紐づくファイルを削除しますか？')){
+  if(confirm('この標本データを完全に消去しますか？')){
     unlockedSessions.delete(currentDetailId);
     await idbDelete(currentDetailId);
     showView('list');
@@ -659,13 +766,13 @@ document.getElementById('detailDeleteBtn').onclick = async ()=>{
 
 function renderDetailFiles(files){
   const box = document.getElementById('detailFiles');
-  box.innerHTML = files.length ? '' : '<p class="status">紐づいたファイルはありません。</p>';
+  box.innerHTML = files.length ? '' : '<p class="status-mono">NO ATTACHMENTS</p>';
   files.forEach((f,i)=>{
     const row = document.createElement('div'); row.className='file-row';
-    row.innerHTML = `<span>${escapeHtml(f.name)}</span>`;
+    row.innerHTML = `<span style="font-family:var(--mono);">${escapeHtml(f.name)}</span>`;
     const btns = document.createElement('span');
-    const openBtn = document.createElement('a'); openBtn.textContent='取得'; openBtn.href=URL.createObjectURL(f.blob); openBtn.download=f.name; openBtn.style.marginRight='12px'; openBtn.style.fontSize='12px';
-    const delBtn = document.createElement('button'); delBtn.textContent='削除'; delBtn.className='btn secondary'; delBtn.style.padding='3px 8px'; delBtn.style.fontSize='11px';
+    const openBtn = document.createElement('a'); openBtn.textContent='[GET]'; openBtn.href=URL.createObjectURL(f.blob); openBtn.download=f.name; openBtn.style.marginRight='10px'; openBtn.style.fontFamily='var(--mono)'; openBtn.style.color='var(--ink)';
+    const delBtn = document.createElement('button'); delBtn.textContent='DEL'; delBtn.className='btn secondary'; delBtn.style.padding='2px 6px'; delBtn.style.fontSize='10px';
     delBtn.onclick = async ()=>{ const it=await idbGet(currentDetailId); it.files.splice(i,1); await idbPut(it); renderDetailFiles(it.files); };
     btns.appendChild(openBtn); btns.appendChild(delBtn);
     row.appendChild(btns); box.appendChild(row);
@@ -681,7 +788,7 @@ document.getElementById('detailFileInput').onchange = async (e)=>{
   e.target.value='';
 };
 
-// 暗号化基盤（AES-256-GCM + PBKDF2）
+// 暗号化基盤
 async function deriveKey(password, salt){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -720,13 +827,11 @@ function base64ToBlob(b64, type){
   return new Blob([arr], {type});
 }
 
-// 暗号化エクスポート（メモ除外オプション対応）
 async function exportItemsEncrypted(items, defaultFileName){
-  const password = prompt('暗号化パスワードを設定してください:');
+  const password = prompt('暗号化パスワード（合言葉）を入力してください:');
   if(!password) return;
 
-  // メモを含めるかの確認
-  const includeNote = confirm('メモの内容を含めて書き出しますか？\n（「キャンセル」を押すとメモを空にしてファイルのみ書き出します）');
+  const includeNote = confirm('メモ（MEMORANDUM）を含めて書き出しますか？\n（キャンセルを選ぶとファイルのみ出力されます）');
 
   const serial = [];
   for(const it of items){
@@ -764,13 +869,13 @@ async function exportItemsEncrypted(items, defaultFileName){
 document.getElementById('detailExportBtn').onclick = async ()=>{
   const it = await idbGet(currentDetailId);
   const safeName = it.name.replace(/[/\\?%*:|"<>]/g, '_');
-  await exportItemsEncrypted([it], `export-${safeName}-${Date.now()}.encbak`);
+  await exportItemsEncrypted([it], `specimen-${safeName}-${Date.now()}.encbak`);
 };
 
 document.getElementById('backupAllBtn').onclick = async ()=>{
   const items = await idbAll();
-  if(!items.length) return alert('登録されている記録がありません。');
-  await exportItemsEncrypted(items, `backup-all-${Date.now()}.encbak`);
+  if(!items.length) return alert('登録標本がありません。');
+  await exportItemsEncrypted(items, `vault-all-${Date.now()}.encbak`);
 };
 
 document.getElementById('restoreBtn').onclick = ()=>document.getElementById('restoreFileInput').click();
@@ -804,16 +909,16 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
         createdAt: it.createdAt
       });
     }
-    alert(`${serial.length}件の記録を読み込みました。`);
+    alert(`RESTORE COMPLETE: ${serial.length} SPECIMENS`);
     renderList();
   }catch(err){
-    alert('復号に失敗しました。パスワードが誤っているか、ファイルが破損しています。');
+    alert('復号失敗: パスワード不一致、またはファイル破損');
   }
 };
 
 (async function init(){
   try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
-  try{ db = await openDb(); }catch(err){ document.body.innerHTML = '<p style="padding:20px;">IndexedDBに非対応です。</p>'; return; }
+  try{ db = await openDb(); }catch(err){ document.body.innerHTML = '<p style="padding:20px;font-family:var(--mono);">ERROR: IndexedDB UNAVAILABLE</p>'; return; }
   
   const statusEl = document.getElementById('headerStatus');
   try {
@@ -821,18 +926,18 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
       quantized: true,
       progress_callback: (p) => {
         if (p.status === 'progress') {
-          statusEl.textContent = `モデル読込中 (${Math.round(p.progress || 0)}%)`;
+          statusEl.textContent = `LOADING WEIGHTS (${Math.round(p.progress || 0)}%)`;
         }
       }
     });
   } catch(err) {
     statusEl.style.color = 'var(--danger)';
-    statusEl.textContent = `エラー: ${err.message || err}`;
+    statusEl.textContent = `CORE ERROR: ${err.message || err}`;
     console.error(err);
     return;
   }
   
-  statusEl.textContent = 'ローカル完結型物体照合ストレージ';
+  statusEl.textContent = 'SYSTEM READY // LOCAL MODE';
   renderList();
 })();
 
