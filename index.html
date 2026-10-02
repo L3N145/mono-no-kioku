@@ -50,7 +50,6 @@ body{
   -webkit-font-smoothing:antialiased;
 }
 
-/* ヘッダー：銘板（ネームプレート）のような佇まい */
 header{
   position:sticky;top:0;z-index:10;background:var(--bg);
   padding:calc(18px + env(safe-area-inset-top,0px)) 20px 14px;
@@ -70,7 +69,6 @@ header .status-tag{
 
 main{padding:20px;max-width:540px;margin:0 auto 90px;}
 
-/* タブ：インデックス目録のような区切り */
 nav.tabs{
   position:fixed;left:0;right:0;bottom:0;display:flex;
   background:var(--bg);border-top:2px solid var(--line-strong);
@@ -88,13 +86,11 @@ nav.tabs button.active{
 
 .view{display:none;} .view.active{display:block;}
 
-/* ボックス・カード：紙片や金属プレートの質感 */
 .panel{
   background:var(--panel);border:1px solid var(--line);
   padding:16px;margin-bottom:16px;position:relative;
 }
 
-/* ボタン：シャープで工業的な押し心地 */
 .btn{
   display:inline-block;border:1px solid var(--accent);border-radius:0;
   padding:11px 16px;font-family:var(--mono);font-size:12px;letter-spacing:0.04em;
@@ -120,7 +116,6 @@ label.field-label{
   letter-spacing:0.05em;display:block;margin-top:4px;
 }
 
-/* 一覧グリッド：標本カードのようなデザイン */
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
 .specimen-card{
   background:var(--panel);border:1px solid var(--line);
@@ -140,13 +135,11 @@ label.field-label{
 .specimen-idx{font-family:var(--mono);font-size:9px;color:var(--sub);letter-spacing:0.04em;}
 .specimen-name{font-size:12px;font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
-/* 光学ファインダー風のプレビュー枠 */
 .finder-box{
   position:relative;background:#000000;margin-bottom:16px;
-  border:1px solid var(--line);display:none;aspect-ratio:4/3;overflow:hidden;
+  border:1px solid var(--line);display:none;aspect-ratio:1/1;overflow:hidden;
 }
-.finder-box img{width:100%;height:100%;object-fit:contain;}
-/* ファインダーの四隅レティクル（十字・カギカッコ線） */
+.finder-box img{width:100%;height:100%;object-fit:cover;}
 .finder-box::before, .finder-box::after{
   content:"";position:absolute;width:16px;height:16px;pointer-events:none;
 }
@@ -196,7 +189,7 @@ label.field-label{
     <h1>モノの記憶</h1>
     <p id="headerStatus">INITIALIZING CORE ENGINE...</p>
   </div>
-  <div class="status-tag">LOCAL VAULT</div>
+  <div class="status-tag">HARDENED VAULT</div>
 </header>
 
 <main>
@@ -214,7 +207,6 @@ label.field-label{
   <!-- 登録画面 -->
   <section id="view-add" class="view">
     <div class="panel">
-      <!-- 光学ファインダー風プレビュー -->
       <div id="addFinder" class="finder-box">
         <img id="addPreview">
         <div class="finder-crosshair"></div>
@@ -240,10 +232,10 @@ label.field-label{
       
       <label class="field-label">SECURITY RESTRICTION</label>
       <select id="addSecurity">
-        <option value="standard">STANDARD（通常表示）</option>
-        <option value="file-lock">FILE LOCK（現物照合までファイルを不可視化）</option>
-        <option value="masked">MASKED（現物照合まで外観・内容を完全秘匿）</option>
-        <option value="hidden">HIDDEN（一覧から除外・現物照合時のみ展開）</option>
+        <option value="standard">STANDARD（通常表示・平文）</option>
+        <option value="file-lock">FILE LOCK（現物照合までファイルを暗号化隔離）</option>
+        <option value="masked">MASKED（現物照合まで外観・内容を完全暗号化）</option>
+        <option value="hidden">HIDDEN（一覧除外・完全暗号化ステルス）</option>
       </select>
 
       <label class="field-label">MATCHING TOLERANCE</label>
@@ -253,7 +245,7 @@ label.field-label{
         <option value="0.70">0.70 [TOLERANT] - 寛容（複雑な立体物）</option>
       </select>
       
-      <button class="btn block" id="addSaveBtn" style="margin-top:10px;" disabled>COMMIT TO STORAGE</button>
+      <button class="btn block" id="addSaveBtn" style="margin-top:10px;" disabled>COMMIT TO VAULT</button>
       <p class="status-mono" id="addStatus"></p>
     </div>
   </section>
@@ -278,8 +270,8 @@ label.field-label{
     <button class="btn secondary" id="detailBack" style="margin-bottom:14px;padding:6px 12px;font-size:11px;">← RETURN TO INDEX</button>
     
     <div id="detailLockNotice" class="warn-box" style="display:none;">
-      <div class="title">RESTRICTED</div>
-      現物照合が行われていないため、一部のデータが保護されています。
+      <div class="title">RESTRICTED & ENCRYPTED</div>
+      現物照合が行われていないため、データは暗号化されたまま保護されています。
     </div>
 
     <div class="panel">
@@ -347,14 +339,19 @@ env.allowLocalModels = false;
 const DEFAULT_THRESHOLD = 0.75;
 const DUPLICATE_THRESHOLD = 0.82;
 
-let db, extractor, addBlob=null, addEmbedding=null, findBlob=null, currentDetailId=null;
+let db, extractor, deviceMasterKey=null;
+let addBlob=null, addEmbedding=null, findBlob=null, currentDetailId=null;
 let duplicateCandidateId = null;
 
+// メモリ上にのみ一時保持する復号セッション（画面遷移・バックグラウンド移行で即破棄）
 const unlockedSessions = new Set();
+// 復号済みの一時データキャッシュ（RAM内のみ）
+const unlockedPayloadCache = new Map();
 
 function lockAllSessions(){
   if(unlockedSessions.size > 0){
     unlockedSessions.clear();
+    unlockedPayloadCache.clear();
     const activeView = document.querySelector('.view.active')?.id;
     if(activeView === 'view-detail') showView('list');
     else if(activeView === 'view-list') renderList();
@@ -365,12 +362,14 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) lockAllSessions();
 });
 
+// IndexedDB 初期化（v5: メタデータ用ストア追加）
 function openDb(){
   return new Promise((resolve,reject)=>{
-    const req = indexedDB.open('mono-no-kioku', 4);
+    const req = indexedDB.open('mono-no-kioku', 5);
     req.onupgradeneeded = e => {
       const d = e.target.result;
       if (!d.objectStoreNames.contains('items')) d.createObjectStore('items', {keyPath:'id'});
+      if (!d.objectStoreNames.contains('meta')) d.createObjectStore('meta', {keyPath:'id'});
     };
     req.onsuccess = e => resolve(e.target.result);
     req.onerror = () => reject(req.error);
@@ -381,42 +380,100 @@ function idbPut(item){ return new Promise((res,rej)=>{ const tx=db.transaction('
 function idbDelete(id){ return new Promise((res,rej)=>{ const tx=db.transaction('items','readwrite').objectStore('items').delete(id); tx.onsuccess=()=>res(); tx.onerror=()=>rej(tx.error); }); }
 function idbGet(id){ return new Promise((res,rej)=>{ const tx=db.transaction('items','readonly').objectStore('items').get(id); tx.onsuccess=()=>res(tx.result); tx.onerror=()=>rej(tx.error); }); }
 
-async function downscaleImage(file, maxSide = 1000, quality = 0.85){
+// 外部抽出不能（extractable: false）な端末内マスターキーの管理
+async function getOrCreateDeviceMasterKey(){
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('meta', 'readwrite');
+    const store = tx.objectStore('meta');
+    const req = store.get('device_master_key');
+    req.onsuccess = async () => {
+      if (req.result && req.result.key) {
+        resolve(req.result.key);
+      } else {
+        // 新規生成（ブラウザ外へのエクスポートを禁止）
+        const newKey = await crypto.subtle.generateKey(
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt', 'decrypt']
+        );
+        store.put({ id: 'device_master_key', key: newKey });
+        resolve(newKey);
+      }
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// 端末マスターキーによる暗号化・復号
+async function encryptWithDeviceKey(key, plainBytes){
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plainBytes);
+  const out = new Uint8Array(iv.length + cipher.byteLength);
+  out.set(iv, 0);
+  out.set(new Uint8Array(cipher), iv.length);
+  return out;
+}
+
+async function decryptWithDeviceKey(key, cipherBytes){
+  const iv = cipherBytes.slice(0, 12);
+  const data = cipherBytes.slice(12);
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+  return new Uint8Array(plain);
+}
+
+// 画像の「中央正方形クロップ」＋リサイズ（アスペクト比歪み排除）
+async function cropCenterSquareAndDownscale(file, size = 800, quality = 0.85){
   const bmp = await createImageBitmap(file);
-  let { width, height } = bmp;
-  if (width > maxSide || height > maxSide) {
-    if (width > height) {
-      height = Math.round((height * maxSide) / width);
-      width = maxSide;
-    } else {
-      width = Math.round((width * maxSide) / height);
-      height = maxSide;
-    }
-  }
+  const minSide = Math.min(bmp.width, bmp.height);
+  const sx = Math.round((bmp.width - minSide) / 2);
+  const sy = Math.round((bmp.height - minSide) / 2);
+
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(bmp, 0, 0, width, height);
+  
+  // 中央正方形をクロップして等比描画
+  ctx.drawImage(bmp, sx, sy, minSide, minSide, 0, 0, size, size);
   bmp.close();
   return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
 }
 
+// DINOによる「ハイブリッド特徴抽出（[CLS] ＋ パッチ平均合成）」
 async function embed(blob){
   const url = URL.createObjectURL(blob);
   try {
     const output = await extractor(url);
     const hiddenDim = 384;
+    const numPatches = 196; // 14x14
     const rawData = output.data;
+
+    // 1. [CLS] トークン（大局的フォルム）
     const cls = new Float32Array(hiddenDim);
     for (let i = 0; i < hiddenDim; i++) cls[i] = rawData[i];
 
+    // 2. パッチトークンの平均（表面テクスチャ・微細模様）
+    const patchMean = new Float32Array(hiddenDim);
+    for (let p = 1; p <= numPatches; p++) {
+      const offset = p * hiddenDim;
+      for (let i = 0; i < hiddenDim; i++) {
+        patchMean[i] += rawData[offset + i];
+      }
+    }
+    for (let i = 0; i < hiddenDim; i++) patchMean[i] /= numPatches;
+
+    // 3. ハイブリッド合成（CLS + PatchMean）とL2正規化
     let sumSq = 0;
-    for (let i = 0; i < hiddenDim; i++) sumSq += cls[i] * cls[i];
+    const hybrid = new Float32Array(hiddenDim);
+    for (let i = 0; i < hiddenDim; i++) {
+      const val = cls[i] + patchMean[i];
+      hybrid[i] = val;
+      sumSq += val * val;
+    }
     const norm = Math.sqrt(sumSq) || 1.0;
 
     const embedding = new Array(hiddenDim);
-    for (let i = 0; i < hiddenDim; i++) embedding[i] = cls[i] / norm;
+    for (let i = 0; i < hiddenDim; i++) embedding[i] = hybrid[i] / norm;
     return embedding;
   } finally {
     URL.revokeObjectURL(url);
@@ -428,6 +485,126 @@ function cosine(a, b){
   let dot = 0;
   for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
   return Math.max(-1, Math.min(1, dot));
+}
+
+function blobToBase64(blob){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = ()=>res(r.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(blob);
+  });
+}
+function base64ToBlob(b64, type){
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return new Blob([arr], {type});
+}
+
+// 記録オブジェクトの安静時暗号化（DB保存前）
+async function secureItemForStorage(rawItem){
+  const sec = rawItem.security || 'standard';
+  if(sec === 'standard'){
+    return rawItem; // 通常表示はそのまま平文保存
+  }
+
+  // センシティブな写真・ファイル・メモを直列化
+  const photosB64 = [];
+  for(const p of rawItem.photos){
+    photosB64.push({ type: p.type, data: await blobToBase64(p) });
+  }
+  const filesB64 = [];
+  for(const f of (rawItem.files || [])){
+    filesB64.push({ name: f.name, type: f.blob.type, data: await blobToBase64(f.blob) });
+  }
+
+  if(sec === 'file-lock'){
+    // ファイルのみを暗号化隔離
+    const plainFilesBytes = new TextEncoder().encode(JSON.stringify(filesB64));
+    const encryptedFiles = await encryptWithDeviceKey(deviceMasterKey, plainFilesBytes);
+    return {
+      ...rawItem,
+      files: [], // 平文領域からは消去
+      encryptedFiles: encryptedFiles
+    };
+  }
+
+  // 'masked' または 'hidden': 外観と内容を丸ごと暗号化
+  const sensitivePayload = {
+    name: rawItem.name,
+    note: rawItem.note || '',
+    photos: photosB64,
+    files: filesB64
+  };
+  const plainBytes = new TextEncoder().encode(JSON.stringify(sensitivePayload));
+  const encryptedPayload = await encryptWithDeviceKey(deviceMasterKey, plainBytes);
+
+  return {
+    id: rawItem.id,
+    security: sec,
+    threshold: rawItem.threshold,
+    embeddings: rawItem.embeddings,
+    createdAt: rawItem.createdAt,
+    name: '[RESTRICTED]', // 平文のDB上にはマスク名のみ
+    note: '',
+    photos: [], // 平文の写真も消去
+    files: [],
+    encryptedPayload: encryptedPayload
+  };
+}
+
+// 照合成功時のオンデマンド一時復号（RAM内のみ展開）
+async function resolveItemPayload(storedItem, isUnlocked){
+  const sec = storedItem.security || 'standard';
+  if(sec === 'standard') return storedItem;
+
+  // すでにRAMキャッシュにある場合はそれを返す
+  if(unlockedPayloadCache.has(storedItem.id)){
+    return unlockedPayloadCache.get(storedItem.id);
+  }
+
+  if(!isUnlocked){
+    return storedItem; // ロック状態なら暗号化・マスク状態のまま返す
+  }
+
+  // 照合済みの場合のみ、デバイスマスターキーで復号
+  if(sec === 'file-lock' && storedItem.encryptedFiles){
+    try {
+      const plainBytes = await decryptWithDeviceKey(deviceMasterKey, storedItem.encryptedFiles);
+      const filesB64 = JSON.parse(new TextDecoder().decode(plainBytes));
+      const resolvedFiles = filesB64.map(f => ({ name: f.name, blob: base64ToBlob(f.data, f.type) }));
+      const fullItem = { ...storedItem, files: resolvedFiles };
+      unlockedPayloadCache.set(storedItem.id, fullItem);
+      return fullItem;
+    } catch(e) {
+      console.error('File decrypt error:', e);
+      return storedItem;
+    }
+  }
+
+  if((sec === 'masked' || sec === 'hidden') && storedItem.encryptedPayload){
+    try {
+      const plainBytes = await decryptWithDeviceKey(deviceMasterKey, storedItem.encryptedPayload);
+      const payload = JSON.parse(new TextDecoder().decode(plainBytes));
+      const resolvedPhotos = payload.photos.map(p => base64ToBlob(p.data, p.type));
+      const resolvedFiles = payload.files.map(f => ({ name: f.name, blob: base64ToBlob(f.data, f.type) }));
+      const fullItem = {
+        ...storedItem,
+        name: payload.name,
+        note: payload.note,
+        photos: resolvedPhotos,
+        files: resolvedFiles
+      };
+      unlockedPayloadCache.set(storedItem.id, fullItem);
+      return fullItem;
+    } catch(e) {
+      console.error('Payload decrypt error:', e);
+      return storedItem;
+    }
+  }
+
+  return storedItem;
 }
 
 function clearFindView(){
@@ -501,15 +678,15 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
   duplicateCandidateId = null;
   document.getElementById('addSaveBtn').disabled = true;
 
-  document.getElementById('addStatus').textContent = 'OPTIMIZING RESAMPLE...';
-  addBlob = await downscaleImage(file);
+  document.getElementById('addStatus').textContent = 'SQUARE RESAMPLE...';
+  addBlob = await cropCenterSquareAndDownscale(file);
   
   const finder = document.getElementById('addFinder');
   const img = document.getElementById('addPreview');
   img.src = URL.createObjectURL(addBlob);
   finder.style.display = 'block';
   
-  document.getElementById('addStatus').textContent = 'EXTRACTING VECTOR MATRIX...';
+  document.getElementById('addStatus').textContent = 'EXTRACTING HYBRID VECTOR...';
   addEmbedding = await embed(addBlob);
 
   const items = await idbAll();
@@ -522,7 +699,7 @@ document.getElementById('addPhotoInput').onchange = async (e)=>{
     }
   }
 
-  document.getElementById('addStatus').textContent = 'VECTOR CAPTURED.';
+  document.getElementById('addStatus').textContent = 'READY TO COMMIT.';
 
   if(candidate && maxScore >= DUPLICATE_THRESHOLD){
     duplicateCandidateId = candidate.id;
@@ -554,14 +731,18 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
   const security = document.getElementById('addSecurity').value;
   const threshold = parseFloat(document.getElementById('addThreshold').value) || DEFAULT_THRESHOLD;
   
-  const item = {
+  const rawItem = {
     id:'item_'+Date.now()+'_'+Math.random().toString(16).slice(2,8),
     name, note, security, threshold,
     photos: [addBlob],
     embeddings: [addEmbedding],
     files:[], createdAt:Date.now()
   };
-  await idbPut(item);
+
+  // 安静時暗号化を経てストレージにコミット
+  const itemToStore = await secureItemForStorage(rawItem);
+  await idbPut(itemToStore);
+
   addBlob=null; addEmbedding=null; duplicateCandidateId=null;
   document.getElementById('addName').value='';
   document.getElementById('addNote').value='';
@@ -578,8 +759,8 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
 document.getElementById('findPhotoBtn').onclick = ()=>document.getElementById('findPhotoInput').click();
 document.getElementById('findPhotoInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
-  document.getElementById('findStatus').textContent='OPTIMIZING...';
-  findBlob = await downscaleImage(file);
+  document.getElementById('findStatus').textContent='SQUARE RESAMPLE...';
+  findBlob = await cropCenterSquareAndDownscale(file);
   
   const finder = document.getElementById('findFinder');
   const img = document.getElementById('findPreview');
@@ -642,11 +823,14 @@ document.getElementById('findPhotoInput').onchange = async (e)=>{
   }
 };
 
-// 詳細表示
+// 詳細表示（必要に応じてオンデマンド一時復号）
 async function openDetail(id){
   currentDetailId = id;
-  const it = await idbGet(id);
+  const storedItem = await idbGet(id);
   const isUnlocked = unlockedSessions.has(id);
+  
+  // 照合状況に応じてRAM内にのみ復号展開
+  const it = await resolveItemPayload(storedItem, isUnlocked);
   const sec = it.security || 'standard';
 
   if(!it.photos && it.photo) it.photos = [it.photo];
@@ -665,11 +849,11 @@ async function openDetail(id){
   secEl.value = sec;
   thEl.value = String(it.threshold !== undefined ? it.threshold : DEFAULT_THRESHOLD);
 
-  if(sec === 'masked' && !isUnlocked){
+  if((sec === 'masked' || sec === 'hidden') && !isUnlocked){
     lockNotice.style.display = 'block';
     finderEl.style.display = 'none';
     anglesCard.style.display = 'none';
-    nameEl.textContent = 'RESTRICTED SPECIMEN';
+    nameEl.textContent = 'RESTRICTED & ENCRYPTED';
     noteEl.value = '';
     noteEl.disabled = true;
     secEl.disabled = true;
@@ -704,13 +888,22 @@ async function openDetail(id){
 document.getElementById('detailBack').onclick = ()=>showView('list');
 
 document.getElementById('detailNote').onchange = async (e)=>{
-  const it = await idbGet(currentDetailId); it.note = e.target.value; await idbPut(it);
+  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+  it.note = e.target.value;
+  unlockedPayloadCache.set(it.id, it);
+  await idbPut(await secureItemForStorage(it));
 };
 document.getElementById('detailSecurity').onchange = async (e)=>{
-  const it = await idbGet(currentDetailId); it.security = e.target.value; await idbPut(it);
+  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+  it.security = e.target.value;
+  unlockedPayloadCache.set(it.id, it);
+  await idbPut(await secureItemForStorage(it));
 };
 document.getElementById('detailThreshold').onchange = async (e)=>{
-  const it = await idbGet(currentDetailId); it.threshold = parseFloat(e.target.value); await idbPut(it);
+  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+  it.threshold = parseFloat(e.target.value);
+  unlockedPayloadCache.set(it.id, it);
+  await idbPut(await secureItemForStorage(it));
 };
 
 function renderDetailAngles(it){
@@ -731,7 +924,8 @@ function renderDetailAngles(it){
       delBtn.onclick = async ()=>{
         it.photos.splice(idx, 1);
         it.embeddings.splice(idx, 1);
-        await idbPut(it);
+        unlockedPayloadCache.set(it.id, it);
+        await idbPut(await secureItemForStorage(it));
         openDetail(it.id);
       };
       wrap.appendChild(delBtn);
@@ -744,21 +938,24 @@ document.getElementById('detailAddAngleBtn').onclick = ()=>document.getElementBy
 document.getElementById('detailAddAngleInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
   e.target.value = '';
-  const it = await idbGet(currentDetailId);
+  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
   if(!it.photos) it.photos = [it.photo];
   if(!it.embeddings) it.embeddings = [it.embedding];
 
-  const blob = await downscaleImage(file);
+  const blob = await cropCenterSquareAndDownscale(file);
   const emb = await embed(blob);
   it.photos.push(blob);
   it.embeddings.push(emb);
-  await idbPut(it);
+  
+  unlockedPayloadCache.set(it.id, it);
+  await idbPut(await secureItemForStorage(it));
   openDetail(it.id);
 };
 
 document.getElementById('detailDeleteBtn').onclick = async ()=>{
   if(confirm('この標本データを完全に消去しますか？')){
     unlockedSessions.delete(currentDetailId);
+    unlockedPayloadCache.delete(currentDetailId);
     await idbDelete(currentDetailId);
     showView('list');
   }
@@ -773,22 +970,29 @@ function renderDetailFiles(files){
     const btns = document.createElement('span');
     const openBtn = document.createElement('a'); openBtn.textContent='[GET]'; openBtn.href=URL.createObjectURL(f.blob); openBtn.download=f.name; openBtn.style.marginRight='10px'; openBtn.style.fontFamily='var(--mono)'; openBtn.style.color='var(--ink)';
     const delBtn = document.createElement('button'); delBtn.textContent='DEL'; delBtn.className='btn secondary'; delBtn.style.padding='2px 6px'; delBtn.style.fontSize='10px';
-    delBtn.onclick = async ()=>{ const it=await idbGet(currentDetailId); it.files.splice(i,1); await idbPut(it); renderDetailFiles(it.files); };
+    delBtn.onclick = async ()=>{
+      const it = await resolveItemPayload(await idbGet(currentDetailId), true);
+      it.files.splice(i,1);
+      unlockedPayloadCache.set(it.id, it);
+      await idbPut(await secureItemForStorage(it));
+      renderDetailFiles(it.files);
+    };
     btns.appendChild(openBtn); btns.appendChild(delBtn);
     row.appendChild(btns); box.appendChild(row);
   });
 }
 document.getElementById('detailAddFile').onclick = ()=>document.getElementById('detailFileInput').click();
 document.getElementById('detailFileInput').onchange = async (e)=>{
-  const it = await idbGet(currentDetailId);
+  const it = await resolveItemPayload(await idbGet(currentDetailId), true);
   it.files = it.files||[];
   for(const f of e.target.files){ it.files.push({name:f.name, blob:f}); }
-  await idbPut(it);
+  unlockedPayloadCache.set(it.id, it);
+  await idbPut(await secureItemForStorage(it));
   renderDetailFiles(it.files);
   e.target.value='';
 };
 
-// 暗号化基盤
+// パスワードによる外部暗号化エクスポート（PBKDF2 + AES-GCM）
 async function deriveKey(password, salt){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
@@ -812,29 +1016,18 @@ async function decryptBytes(password, bytes){
   const plain = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, cipher);
   return new Uint8Array(plain);
 }
-function blobToBase64(blob){
-  return new Promise((res,rej)=>{
-    const r = new FileReader();
-    r.onload = ()=>res(r.result.split(',')[1]);
-    r.onerror = rej;
-    r.readAsDataURL(blob);
-  });
-}
-function base64ToBlob(b64, type){
-  const bin = atob(b64);
-  const arr = new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
-  return new Blob([arr], {type});
-}
 
-async function exportItemsEncrypted(items, defaultFileName){
+async function exportItemsEncrypted(rawItems, defaultFileName){
   const password = prompt('暗号化パスワード（合言葉）を入力してください:');
   if(!password) return;
 
   const includeNote = confirm('メモ（MEMORANDUM）を含めて書き出しますか？\n（キャンセルを選ぶとファイルのみ出力されます）');
 
   const serial = [];
-  for(const it of items){
+  for(const storedIt of rawItems){
+    // エクスポート用に一旦RAM内で一時復号
+    const it = await resolveItemPayload(storedIt, true);
+
     const files = [];
     for(const f of (it.files||[])) files.push({name:f.name, type:f.blob.type, data: await blobToBase64(f.blob)});
     
@@ -897,7 +1090,7 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
       }
 
       const files = (it.files||[]).map(f=>({name:f.name, blob: base64ToBlob(f.data, f.type)}));
-      await idbPut({
+      const rawRestored = {
         id: it.id,
         name: it.name,
         note: it.note || '',
@@ -907,7 +1100,11 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
         photos,
         files,
         createdAt: it.createdAt
-      });
+      };
+
+      // 復元後、この端末のマスターキーで再暗号化して格納
+      const securedItem = await secureItemForStorage(rawRestored);
+      await idbPut(securedItem);
     }
     alert(`RESTORE COMPLETE: ${serial.length} SPECIMENS`);
     renderList();
@@ -918,7 +1115,13 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
 
 (async function init(){
   try{ if(navigator.storage && navigator.storage.persist) await navigator.storage.persist(); }catch(e){}
-  try{ db = await openDb(); }catch(err){ document.body.innerHTML = '<p style="padding:20px;font-family:var(--mono);">ERROR: IndexedDB UNAVAILABLE</p>'; return; }
+  try{
+    db = await openDb();
+    deviceMasterKey = await getOrCreateDeviceMasterKey();
+  }catch(err){
+    document.body.innerHTML = '<p style="padding:20px;font-family:var(--mono);">ERROR: STORAGE INITIALIZATION FAILED</p>';
+    return;
+  }
   
   const statusEl = document.getElementById('headerStatus');
   try {
@@ -937,7 +1140,7 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
     return;
   }
   
-  statusEl.textContent = 'SYSTEM READY // LOCAL MODE';
+  statusEl.textContent = 'SYSTEM READY // HARDENED MODE';
   renderList();
 })();
 
