@@ -204,6 +204,13 @@ label.field-label{
 .dial-round-dot{width:8px;height:8px;border-radius:50%;border:1px solid #666;}
 .dial-round-dot.done{background:#fff;border-color:#fff;}
 .dial-round-dot.current{border-color:#fff;}
+.dial-readout{
+  display:flex;align-items:baseline;justify-content:center;gap:10px;
+  background:#0b0d0a;border:1px solid #2a2f27;border-radius:6px;
+  padding:10px 20px;margin-bottom:22px;min-width:200px;
+}
+.dial-readout-pos{font-family:var(--mono);color:#8fffb0;font-size:34px;font-weight:700;letter-spacing:0.05em;text-shadow:0 0 8px rgba(143,255,176,0.5);min-width:1.2em;text-align:center;}
+.dial-readout-dir{font-family:var(--mono);color:#ffd27a;font-size:16px;font-weight:700;letter-spacing:0.08em;text-shadow:0 0 6px rgba(255,210,122,0.5);min-width:4.5em;}
 .dial-wrap{position:relative;width:240px;height:240px;touch-action:none;user-select:none;}
 .dial-face{
   width:100%;height:100%;border-radius:50%;background:#1a1a1a;
@@ -213,19 +220,11 @@ label.field-label{
 .dial-tick.major{background:#999;height:14px;}
 .dial-knob{
   position:absolute;width:56px;height:56px;border-radius:50%;
-  background:#eee;top:50%;left:50%;margin:-28px 0 0 -28px;
-  box-shadow:0 2px 10px rgba(0,0,0,0.5);
+  background:#3a3a3a;top:50%;left:50%;margin:-28px 0 0 -28px;
+  box-shadow:0 2px 10px rgba(0,0,0,0.5), inset 0 1px 2px rgba(255,255,255,0.15);
 }
-.dial-knob::after{content:"";position:absolute;top:6px;left:50%;width:3px;height:16px;background:#1a1a1a;transform:translateX(-50%);}
-.dial-center-label{
-  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  font-family:var(--mono);color:#fff;font-size:22px;font-weight:600;pointer-events:none;
-}
-.dial-dir-indicator{
-  position:absolute;bottom:-28px;left:50%;transform:translateX(-50%);
-  font-family:var(--mono);color:#888;font-size:10px;letter-spacing:0.1em;
-}
-.dial-btns{display:flex;gap:10px;margin-top:40px;}
+.dial-knob::after{content:"";position:absolute;top:5px;left:50%;width:4px;height:18px;background:#8fffb0;border-radius:2px;transform:translateX(-50%);box-shadow:0 0 6px rgba(143,255,176,0.8);}
+.dial-btns{display:flex;gap:10px;margin-top:28px;}
 #dialErrorMsg{color:var(--danger,#c24b4b);font-family:var(--mono);font-size:11px;margin-top:14px;text-align:center;min-height:14px;}
 </style>
 </head>
@@ -384,11 +383,13 @@ label.field-label{
   <div class="dial-title" id="dialTitle">ENTER COMBINATION</div>
   <div class="dial-sub" id="dialSub"></div>
   <div class="dial-rounds" id="dialRounds"></div>
+  <div class="dial-readout">
+    <span class="dial-readout-pos" id="dialCenterLabel">00</span>
+    <span class="dial-readout-dir" id="dialDirIndicator">&nbsp;</span>
+  </div>
   <div class="dial-wrap" id="dialWrap">
     <div class="dial-face" id="dialFace"></div>
     <div class="dial-knob" id="dialKnob"></div>
-    <div class="dial-center-label" id="dialCenterLabel">0</div>
-    <div class="dial-dir-indicator" id="dialDirIndicator">&nbsp;</div>
   </div>
   <div id="dialErrorMsg"></div>
   <div class="dial-btns">
@@ -733,8 +734,8 @@ function openDial({title, sub, rounds = DIAL_ROUNDS}){
       lastAngle = ang;
       knob.style.transform = `rotate(${cumulative}deg)`;
       currentPos = normalizePos(cumulative);
-      centerLabel.textContent = currentPos;
-      dirIndicator.textContent = cumulative >= 0 ? '→ 右（CW）' : '← 左（CCW）';
+      centerLabel.textContent = String(currentPos).padStart(2,'0');
+      dirIndicator.textContent = cumulative >= 0 ? '→ CW' : '← CCW';
       e.preventDefault();
     }
     function onUp(){
@@ -748,7 +749,7 @@ function openDial({title, sub, rounds = DIAL_ROUNDS}){
       knob.style.transition = 'transform 0.2s';
       setTimeout(()=>{ knob.style.transition=''; }, 220);
       knob.style.transform = 'rotate(0deg)';
-      centerLabel.textContent = '0';
+      centerLabel.textContent = '00';
       dirIndicator.innerHTML = '&nbsp;';
 
       if(currentRound >= rounds){
