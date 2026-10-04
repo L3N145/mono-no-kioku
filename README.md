@@ -1,4 +1,3 @@
----
 
 # モノの記憶 (Technical Specification / README)
 
