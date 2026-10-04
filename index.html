@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co; worker-src 'self' blob:;">
 <meta name="theme-color" content="#121211">
 <link rel="manifest" href="manifest.json">
 <title>モノの記憶</title>
@@ -226,6 +227,20 @@ label.field-label{
 .dial-knob::after{content:"";position:absolute;top:5px;left:50%;width:4px;height:18px;background:#8fffb0;border-radius:2px;transform:translateX(-50%);box-shadow:0 0 6px rgba(143,255,176,0.8);}
 .dial-btns{display:flex;gap:10px;margin-top:28px;}
 #dialErrorMsg{color:var(--danger,#c24b4b);font-family:var(--mono);font-size:11px;margin-top:14px;text-align:center;min-height:14px;}
+
+/* --- バックアップ用パスワードモーダル（prompt()の代替・マスク表示）--- */
+#pwOverlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);
+  z-index:100;align-items:center;justify-content:center;padding:20px;
+}
+#pwOverlay.active{display:flex;}
+.pw-box{background:#161613;border:1px solid #333;border-radius:8px;padding:24px;width:100%;max-width:320px;}
+.pw-title{font-family:var(--mono);color:#fff;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:14px;}
+.pw-box input[type=password]{
+  width:100%;box-sizing:border-box;background:#0b0d0a;border:1px solid #333;border-radius:4px;
+  color:#8fffb0;font-family:var(--mono);font-size:16px;padding:10px 12px;letter-spacing:0.1em;
+}
+.pw-btns{display:flex;gap:10px;margin-top:16px;}
 </style>
 </head>
 <body>
@@ -398,6 +413,17 @@ label.field-label{
   </div>
 </div>
 
+<div id="pwOverlay">
+  <div class="pw-box">
+    <div class="pw-title" id="pwTitle">PASSWORD</div>
+    <input type="password" id="pwInput" autocomplete="off">
+    <div class="pw-btns">
+      <button class="btn secondary" id="pwCancelBtn" style="flex:1;">CANCEL</button>
+      <button class="btn" id="pwOkBtn" style="flex:1;">OK</button>
+    </div>
+  </div>
+</div>
+
 <nav class="tabs">
   <button data-view="list" class="active">INDEX</button>
   <button data-view="add">REGIST</button>
@@ -496,16 +522,26 @@ function setVaultSalt(saltArr){
 // ダイヤルの組み合わせから、その場で鍵を導出する（セッション中はキャッシュを再利用）。
 // 初回（塩が未登録）はセットアップ（2回入力）、以降は通常の解錠ダイヤルを出す。
 // キャンセル時はnullを返す。
+// 連続タップ等で同時に複数回呼ばれても、ダイヤルが二重に開かないよう進行中のPromiseを共有する。
+let vaultKeyPromise = null;
 async function ensureVaultKey(){
   if(vaultKeyCache) return vaultKeyCache;
-  const existed = await vaultSaltExists();
-  const salt = await getOrCreateVaultSalt();
-  const combo = existed
-    ? await openDial({ title:'VAULT ACCESS', sub:'ダイヤルを回して解錠してください' })
-    : await setupDialCombination();
-  if(combo === null) return null;
-  vaultKeyCache = await deriveKey(combo, salt);
-  return vaultKeyCache;
+  if(vaultKeyPromise) return vaultKeyPromise;
+  vaultKeyPromise = (async () => {
+    try{
+      const existed = await vaultSaltExists();
+      const salt = await getOrCreateVaultSalt();
+      const combo = existed
+        ? await openDial({ title:'VAULT ACCESS', sub:'ダイヤルを回して解錠してください' })
+        : await setupDialCombination();
+      if(combo === null) return null;
+      vaultKeyCache = await deriveKey(combo, salt);
+      return vaultKeyCache;
+    } finally {
+      vaultKeyPromise = null;
+    }
+  })();
+  return vaultKeyPromise;
 }
 
 async function encryptWithDeviceKey(key, plainBytes){
@@ -583,9 +619,13 @@ async function embed(blob){
   const url = URL.createObjectURL(blob);
   try {
     const output = await extractor(url);
-    const hiddenDim = 384;
-    const numPatches = 196;
     const rawData = output.data;
+    // モデル出力の形状 [1, seqLen, hiddenDim] から動的に取得する。
+    // 取得できない場合のみ、現行モデル（vits16, 224px入力）の既定値にフォールバックする。
+    const dims = output.dims;
+    const hiddenDim = (dims && dims.length >= 1) ? dims[dims.length - 1] : 384;
+    const seqLen = (dims && dims.length >= 2) ? dims[dims.length - 2] : 197;
+    const numPatches = seqLen - 1; // 先頭1つはCLSトークン
 
     const cls = new Float32Array(hiddenDim);
     for (let i = 0; i < hiddenDim; i++) cls[i] = rawData[i];
@@ -653,6 +693,35 @@ function base64ToBlob(b64, type){
   const arr = new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
   return new Blob([arr], {type});
+}
+
+// マスク入力のパスワードモーダル（window.prompt()は画面に平文表示されてしまうため代替する）
+function askPassword(title){
+  return new Promise((resolve)=>{
+    const overlay = document.getElementById('pwOverlay');
+    const input = document.getElementById('pwInput');
+    const okBtn = document.getElementById('pwOkBtn');
+    const cancelBtn = document.getElementById('pwCancelBtn');
+    document.getElementById('pwTitle').textContent = title;
+    input.value = '';
+    overlay.classList.add('active');
+    setTimeout(()=>input.focus(), 50);
+
+    function finish(value){
+      overlay.classList.remove('active');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+      resolve(value);
+    }
+    function onOk(){ finish(input.value || null); }
+    function onCancel(){ finish(null); }
+    function onKeydown(e){ if(e.key === 'Enter') onOk(); if(e.key === 'Escape') onCancel(); }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+  });
 }
 
 // --- ダイヤル式コンビネーション錠 ---
@@ -1516,7 +1585,7 @@ async function deriveKey(password, salt){
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
-    { name:'PBKDF2', salt, iterations:150000, hash:'SHA-256' },
+    { name:'PBKDF2', salt, iterations:310000, hash:'SHA-256' },
     keyMaterial, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']
   );
 }
@@ -1537,7 +1606,7 @@ async function decryptBytes(password, bytes){
 }
 
 async function exportItemsEncrypted(rawItems, defaultFileName){
-  const password = prompt('暗号化パスワード（合言葉）を入力してください:');
+  const password = await askPassword('暗号化パスワード（合言葉）を設定');
   if(!password) return;
 
   const includeNote = confirm('メモ（MEMORANDUM）を含めて書き出しますか？\n（キャンセルを選ぶとファイルのみ出力されます）');
@@ -1627,7 +1696,7 @@ document.getElementById('restoreBtn').onclick = ()=>document.getElementById('res
 document.getElementById('restoreFileInput').onchange = async (e)=>{
   const file = e.target.files[0]; if(!file) return;
   e.target.value='';
-  const password = prompt('復号パスワードを入力してください:');
+  const password = await askPassword('復号パスワードを入力');
   if(!password) return;
   try{
     const bytes = new Uint8Array(await file.arrayBuffer());
