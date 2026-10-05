@@ -562,15 +562,17 @@ async function decryptWithDeviceKey(key, cipherBytes){
 function safeObjectUrl(source){
   if (!source) return '';
   try {
+    // 添付ファイル（files）はBlobのまま扱うためこの分岐が残っている
     if (source instanceof Blob) {
       return URL.createObjectURL(source);
     }
     if (typeof source === 'string') {
       if (source.startsWith('data:') || source.startsWith('blob:')) return source;
-      return URL.createObjectURL(base64ToBlob(source, 'image/jpeg'));
+      return `data:image/jpeg;base64,${source}`;
     }
+    // 写真は { data, type } 形式。data: URLを直接組み立てて返す（Blobを経由しない）。
     if (source.data && source.type) {
-      return URL.createObjectURL(base64ToBlob(source.data, source.type));
+      return `data:${source.type};base64,${source.data}`;
     }
   } catch (err) {
     console.error('safeObjectUrl error:', err);
@@ -692,6 +694,12 @@ function base64ToBlob(b64, type){
   const arr = new Uint8Array(bin.length);
   for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
   return new Blob([arr], {type});
+}
+
+// 写真はIndexedDBにBlobのまま保存しない（SafariでBlobが破損する既知の問題を避けるため）。
+// 撮影・生成直後にこの関数でBase64文字列へ変換し、以後は { data, type } の形でのみ扱う。
+async function blobToPhotoObj(blob){
+  return { type: blob.type || 'image/jpeg', data: await blobToBase64(blob) };
 }
 
 // マスク入力のパスワードモーダル（window.prompt()は画面に平文表示されてしまうため代替する）
@@ -869,6 +877,9 @@ async function secureItemForStorage(rawItem){
   const primaryIdx = rawItem.primaryIdx !== undefined ? rawItem.primaryIdx : 0;
   
   if(sec === 'standard'){
+    if(!rawItem.photos || rawItem.photos.length === 0){
+      console.warn('[secureItemForStorage] photosが空の状態で保存されようとしています id=%s', rawItem.id, rawItem);
+    }
     return {
       id: rawItem.id,
       security: 'standard',
@@ -883,10 +894,8 @@ async function secureItemForStorage(rawItem){
     };
   }
 
-  const photosB64 = [];
-  for(const p of rawItem.photos){
-    photosB64.push({ type: p.type, data: await blobToBase64(p) });
-  }
+  // photosは登録時点で既に { data, type } 形式のため、ここでの変換は不要。
+  const photosB64 = rawItem.photos.map(p => ({ type: p.type, data: p.data }));
   const filesB64 = [];
   for(const f of (rawItem.files || [])){
     filesB64.push({ name: f.name, type: f.blob.type, data: await blobToBase64(f.blob) });
@@ -979,7 +988,7 @@ async function resolveItemPayload(storedItem, isUnlocked){
     try {
       const plainBytes = await decryptWithDeviceKey(vaultKey, storedItem.encryptedPayload);
       const payload = JSON.parse(new TextDecoder().decode(plainBytes));
-      const resolvedPhotos = payload.photos.map(p => base64ToBlob(p.data, p.type));
+      const resolvedPhotos = payload.photos; // 既に { data, type } 形式。Blobへの変換はしない。
       const resolvedFiles = payload.files.map(f => ({ name: f.name, blob: base64ToBlob(f.data, f.type) }));
       const fullItem = {
         ...storedItem,
@@ -1049,10 +1058,16 @@ async function renderList(){
       // 選択された代表サムネイル（primaryIdx）を表示
       const pIdx = (it.primaryIdx !== undefined) ? it.primaryIdx : 0;
       const primaryPhoto = (it.photos && it.photos.length) ? (it.photos[pIdx] || it.photos[0]) : it.photo;
-      const imgUrl = safeObjectUrl(primaryPhoto);
+      const imgUrl = primaryPhoto ? safeObjectUrl(primaryPhoto) : '';
+      if(!primaryPhoto){
+        console.warn('[thumb] 写真が見つかりません id=%s security=%s photos=%o photo=%o', it.id, it.security, it.photos, it.photo);
+      }
+      const thumbInner = imgUrl
+        ? `<img class="specimen-thumb" src="${imgUrl}">`
+        : `<div class="specimen-thumb masked">[ NO IMAGE ]</div>`;
       card.innerHTML = `
         <div class="specimen-thumb-wrap">
-          <img class="specimen-thumb" src="${imgUrl}">
+          ${thumbInner}
         </div>
         <div class="specimen-meta">
           <div class="specimen-idx">#${padIdx} // ${it.security.toUpperCase()}</div>
@@ -1134,7 +1149,7 @@ document.getElementById('addSaveBtn').onclick = async ()=>{
     id:'item_'+Date.now()+'_'+Math.random().toString(16).slice(2,8),
     name, note, security, threshold,
     primaryIdx: 0, // 初期代表写真は先頭
-    photos: [addBlob],
+    photos: [await blobToPhotoObj(addBlob)],
     embeddings: addEmbeddingGroup,
     files:[], createdAt:Date.now()
   };
@@ -1243,7 +1258,7 @@ async function openDetail(id, focusPhotoIdx = null){
   const it = loadedDetailItem;
   const sec = it.security || 'standard';
 
-  if(!it.photos && it.photo) it.photos = [it.photo];
+  if((!it.photos || it.photos.length === 0) && it.photo) it.photos = [it.photo];
   if(!it.embeddings && it.embedding) it.embeddings = [it.embedding];
   if(it.primaryIdx === undefined) it.primaryIdx = 0;
 
@@ -1432,13 +1447,13 @@ function renderDetailAngles(it){
   const isProtectedAndLocked = (it.security !== 'standard') && !isUnlocked;
   const primaryIdx = it.primaryIdx || 0;
 
-  it.photos.forEach((blobSource, idx)=>{
+  it.photos.forEach((photoSource, idx)=>{
     const wrap = document.createElement('div');
     wrap.className = 'angle-thumb-wrap' + (idx === currentActivePhotoIdx ? ' active' : '');
     
     const img = document.createElement('img');
     img.className = 'angle-thumb';
-    img.src = safeObjectUrl(blobSource);
+    img.src = safeObjectUrl(photoSource);
     wrap.appendChild(img);
 
     // 代表サムネイルであればタグを表示
@@ -1516,7 +1531,7 @@ document.getElementById('detailAddAngleInput').onchange = async (e)=>{
       statusEl.textContent = `ADDING KEY // ${phase}...`;
     });
 
-    it.photos.push(newBlob);
+    it.photos.push(await blobToPhotoObj(newBlob));
     it.embeddings.push(...newEmbs);
     
     unlockedPayloadCache.set(it.id, it);
@@ -1629,7 +1644,8 @@ async function exportItemsEncrypted(rawItems, defaultFileName){
         embeddings: storedIt.embeddings || [storedIt.embedding],
         createdAt: storedIt.createdAt,
         // file-lockは写真自体は平時から平文のためそのまま書き出す。masked/hiddenは空のまま。
-        photos: await Promise.all((storedIt.photos||[]).map(async p => ({ type:p.type, data: await blobToBase64(p) }))),
+        // 既に { data, type } 形式のため変換不要。
+        photos: (storedIt.photos||[]).map(p => ({ type:p.type, data:p.data })),
         encryptedPayload: storedIt.encryptedPayload ? Array.from(storedIt.encryptedPayload) : null,
         encryptedFiles: storedIt.encryptedFiles ? Array.from(storedIt.encryptedFiles) : null
       });
@@ -1640,10 +1656,7 @@ async function exportItemsEncrypted(rawItems, defaultFileName){
     const files = [];
     for(const f of (it.files||[])) files.push({name:f.name, type:f.blob.type, data: await blobToBase64(f.blob)});
     const photosSrc = (it.photos && it.photos.length) ? it.photos : [it.photo];
-    const photosB64 = [];
-    for(const p of photosSrc){
-      photosB64.push({ type: p.type, data: await blobToBase64(p) });
-    }
+    const photosB64 = photosSrc.map(p => ({ type: p.type, data: p.data }));
     serial.push({
       id: it.id,
       protectedRaw: false,
@@ -1713,7 +1726,7 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
     for(const it of serial){
       if(it.protectedRaw){
         // 暗号化されたまま保存する（この端末のダイヤルの組み合わせが、書き出し元と同じ場合のみ後で開ける）
-        const photos = (it.photos||[]).map(p => base64ToBlob(p.data, p.type));
+        const photos = (it.photos||[]).map(p => ({ data:p.data, type:p.type }));
         await idbPut({
           id: it.id,
           name: '[RESTRICTED]',
@@ -1733,9 +1746,9 @@ document.getElementById('restoreFileInput').onchange = async (e)=>{
 
       let photos = [];
       if(it.photos && it.photos.length){
-        photos = it.photos.map(p => base64ToBlob(p.data, p.type));
+        photos = it.photos.map(p => ({ data:p.data, type:p.type }));
       } else if(it.photo) {
-        photos = [base64ToBlob(it.photo, it.photoType)];
+        photos = [{ data: it.photo, type: it.photoType }];
       }
 
       const files = (it.files||[]).map(f=>({name:f.name, blob: base64ToBlob(f.data, f.type)}));
